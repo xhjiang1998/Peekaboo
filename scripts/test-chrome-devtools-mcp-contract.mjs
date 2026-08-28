@@ -54,6 +54,7 @@ const expectedSourceProvenBackgroundNames = namesInContractSection(
   "user-activation-source-proven-background",
   userActivationContract,
 );
+const expectedTrustedPointerNames = namesInContractSection("trusted-pointer", semanticsContract);
 const expectedElementReferencePaths = namesInContractSection("element-reference-path");
 const expectedPageResponseNames = namesInContractSection("page-response");
 const expectedSnapshotResponseNames = namesInContractSection("snapshot-response");
@@ -284,6 +285,32 @@ assert.match(
   inputToolSource,
   /File uploaded from \$\{filePath\}/,
   "provider upload-path response changed",
+);
+assert.deepEqual(
+  expectedTrustedPointerNames,
+  ["click", "click_at", "drag", "fill", "fill_form", "hover", "upload_file"],
+  "re-audit every provider route that can issue trusted pointer input",
+);
+assert.match(inputToolSource, /handle\.asLocator\(\)\.click\(/, "provider element click route changed");
+assert.match(inputToolSource, /pptrPage\.mouse\.click\(/, "provider coordinate click route changed");
+assert.match(inputToolSource, /asLocator\(\)\.hover\(/, "provider hover route changed");
+assert.match(inputToolSource, /fromHandle\.drag\(toHandle\)/, "provider drag route changed");
+assert.match(inputToolSource, /await handle\.asLocator\(\)\.fill\(/, "provider fill route changed");
+assert.match(inputToolSource, /await fillFormElement\(/, "provider fill-form route changed");
+assert.match(
+  inputToolSource,
+  /waitForFileChooser[\s\S]*handle\.asLocator\(\)\.click\(/,
+  "provider upload click fallback changed",
+);
+assert.match(
+  scriptToolSource,
+  /await evaluatable\.evaluate\(/,
+  "provider evaluate-script route no longer stays in page JavaScript",
+);
+assert.doesNotMatch(
+  scriptToolSource,
+  /\bInput\./,
+  "provider evaluate-script route unexpectedly reaches trusted CDP input",
 );
 assert.match(
   screenshotToolSource,

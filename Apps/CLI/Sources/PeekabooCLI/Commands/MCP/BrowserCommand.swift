@@ -92,7 +92,7 @@ InjectedRuntimeBackedCommand {
         abstract: "Control Chrome page content through the browser MCP tool",
         discussion: """
         Dedicated CLI wrapper around Peekaboo's browser MCP tool. Use it for DOM/page
-        operations such as status, connect, navigate, snapshot, click, fill, type,
+        operations such as status, connect, navigate, snapshot, click, dom-click, fill, type,
         screenshots, console/network inspection, and performance traces.
 
         Examples:
@@ -108,6 +108,11 @@ InjectedRuntimeBackedCommand {
         and report foreground browser-protocol delivery.
         Default calls still require an existing exact connection and never ambiently auto-connect. With explicit
         --foreground, only standalone CLI page actions may auto-connect when no receipt exists.
+        Persistent MCP, Agent, and Bridge-scoped page actions never ambiently auto-connect. Use explicit connect for a
+        foreground-authorized child, or transfer an exact signed handoff into a background Bridge-scoped MCP child;
+        background sessions still expose only source-audited routes that cannot grant browser user activation.
+        `dom-click` avoids Puppeteer pointer input, but its script evaluation still grants browser user activation and
+        therefore also requires --foreground.
         """
     )
 

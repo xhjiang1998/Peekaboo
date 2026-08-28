@@ -811,6 +811,59 @@ struct MCPToolExecutionPolicyTests {
     }
 }
 
+struct MCPBrowserPointerExecutionPolicyTests {
+    private let foregroundActions: [BrowserAction] = [
+        .click,
+        .domClick,
+        .fill,
+        .fillForm,
+        .drag,
+        .hover,
+        .type,
+        .pressKey,
+        .uploadFile,
+    ]
+
+    @Test
+    func `background policy refuses pointer and synthetic click activation routes`() throws {
+        let requests = self.foregroundActions.map { ToolArguments(raw: ["action": $0.rawValue]) } +
+            BrowserToolActionSemantics.trustedPointerToolNames.map { toolName in
+                ToolArguments(raw: ["action": "call", "mcp_tool": toolName])
+            } + [ToolArguments(raw: ["action": "call", "mcp_tool": "evaluate_script"])]
+
+        for arguments in requests {
+            let response = try #require(MCPToolExecutionPolicy.backgroundOnly.rejection(
+                toolName: "browser",
+                arguments: arguments))
+            let meta = try #require(response.meta?.objectValue)
+            #expect(meta["refusal_reason"] == .string("foreground_consent_required"))
+            #expect(meta["dispatch_state"] == .string("none"))
+            #expect(meta["mutation_dispatched"] == .bool(false))
+            #expect(meta["retry_safe"] == .bool(true))
+        }
+    }
+
+    @Test
+    func `foreground policy retains pointer and synthetic click activation routes`() {
+        for action in self.foregroundActions {
+            #expect(MCPToolExecutionPolicy.foregroundAllowed.rejection(
+                toolName: "browser",
+                arguments: ToolArguments(raw: ["action": action.rawValue])) == nil)
+        }
+        for toolName in BrowserToolActionSemantics.trustedPointerToolNames {
+            #expect(MCPToolExecutionPolicy.foregroundAllowed.rejection(
+                toolName: "browser",
+                arguments: ToolArguments(raw: [
+                    "action": "call",
+                    "mcp_tool": toolName,
+                ])) == nil)
+        }
+        #expect(MCPToolExecutionPolicy.foregroundAllowed.rejection(
+            toolName: "browser",
+            arguments: ToolArguments(raw: ["action": "call", "mcp_tool": "evaluate_script"])) == nil)
+    }
+}
+
 private actor PolicyInvocationCounter {
     private(set) var value = 0
 

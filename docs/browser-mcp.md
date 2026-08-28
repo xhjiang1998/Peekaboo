@@ -181,6 +181,7 @@ Common actions:
 - `wait_for`
 - `snapshot`
 - `click`
+- `dom_click`
 - `fill`
 - `type`
 - `press_key`
@@ -220,6 +221,15 @@ compatibility boundary rather than a persistent caller capability namespace. `se
 page visually behind other apps, but remain foreground-authority operations because their provider response formatting
 grants browser user activation. Use `bring_to_front: true` or `background: false` only when visible foreground
 interaction is intentional.
+
+On macOS, standalone Chrome can activate its native window when the pinned provider issues trusted pointer input.
+Background-only MCP and Agent catalogs therefore omit `click`, `fill`, `fill_form`, `drag`, `hover`, `type`,
+`press_key`, and `upload_file`; raw `click`, `click_at`, `fill`, `drag`, `hover`, `upload_file`, and pointer-bearing
+`fill_form` calls are refused by policy before provider dispatch. Foreground-capable sessions retain those actions, and
+their canonical outcome reports foreground delivery. `dom_click` is receipt- and element-bound and dispatches a synthetic
+`element.click()` without CDP or Puppeteer pointer input. Its pinned `evaluate_script` provider path still grants
+browser user activation, so `dom_click` is hidden and refused in background mode and reports foreground delivery when
+explicitly authorized.
 
 `type` and `press_key` also require an opaque element reference from the newest snapshot as `uid`. Peekaboo holds one browser execution gate while it
 focuses that exact uid and sends the keyboard operation; concurrent page work cannot interleave between those leaves.

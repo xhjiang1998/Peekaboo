@@ -203,6 +203,41 @@ struct BrowserToolCapabilityIntegrationTests {
     }
 
     @Test
+    func `foreground DOM click keeps opaque capability binding and reports user activation`() async throws {
+        let client = CapabilityBrowserMCPClient()
+        let context = Self.context(client: client, executionPolicy: .foregroundAllowed)
+        let tool = BrowserTool(context: context)
+        let pageReference = try await Self.pageReference(from: context.execute(
+            tool: tool,
+            arguments: ToolArguments(raw: ["action": "list_pages"])))
+        let snapshot = try await context.execute(
+            tool: tool,
+            arguments: ToolArguments(raw: [
+                "action": "snapshot",
+                "page_id": pageReference,
+            ]))
+        let elementReference = try Self.elementReference(from: snapshot)
+
+        let response = try await context.execute(
+            tool: tool,
+            arguments: ToolArguments(raw: [
+                "action": "dom_click",
+                "page_id": pageReference,
+                "uid": elementReference,
+            ]))
+
+        #expect(!response.isError)
+        let call = try #require(client.sequences.last?.last)
+        #expect(call.toolName == "evaluate_script")
+        #expect(call.arguments["pageId"] as? Int == 7)
+        #expect(call.arguments["args"] as? [String] == ["1_0"])
+        #expect(client.elementPreflights.last == BrowserMCPElementPreflight(
+            providerPageID: 7,
+            providerUIDs: ["1_0"]))
+        #expect(response.meta?.objectValue?["delivery_mode"] == .string("foreground"))
+    }
+
+    @Test
     func `evaluate script domain uid text is not rewritten as an element capability`() async throws {
         let client = CapabilityBrowserMCPClient()
         let context = Self.context(client: client, executionPolicy: .foregroundAllowed)

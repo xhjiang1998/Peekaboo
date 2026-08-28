@@ -937,6 +937,7 @@ public enum BrowserAction: String, CaseIterable, Sendable {
     case waitFor = "wait_for"
     case snapshot
     case click
+    case domClick = "dom_click"
     case fill
     case fillForm = "fill_form"
     case drag
@@ -1049,7 +1050,7 @@ public enum BrowserMCPCallMapper {
         case .call:
             // Invalid/unknown raw calls are rejected later; classify them conservatively until then.
             .mutating
-        case .closePage, .newPage, .navigate, .click, .fill, .fillForm, .drag, .hover, .type, .pressKey,
+        case .closePage, .newPage, .navigate, .click, .domClick, .fill, .fillForm, .drag, .hover, .type, .pressKey,
              .uploadFile, .handleDialog:
             .mutating
         }
@@ -1128,7 +1129,8 @@ public enum BrowserMCPCallMapper {
             throw BrowserToolError.invalidAction(action.rawValue)
         case .listPages, .selectPage, .closePage, .newPage, .navigate, .waitFor:
             try self.pageCall(action: action, arguments: arguments)
-        case .snapshot, .click, .fill, .fillForm, .drag, .hover, .type, .pressKey, .uploadFile, .handleDialog,
+        case .snapshot, .click, .domClick, .fill, .fillForm, .drag, .hover, .type, .pressKey, .uploadFile,
+             .handleDialog,
              .screenshot:
             try self.interactionCall(action: action, arguments: arguments)
         case .console, .network, .performanceTrace:
@@ -1143,7 +1145,7 @@ public enum BrowserMCPCallMapper {
 
     private static func requiresPageID(_ action: BrowserAction) -> Bool {
         switch action {
-        case .navigate, .waitFor, .snapshot, .click, .fill, .fillForm, .drag, .hover, .type, .pressKey,
+        case .navigate, .waitFor, .snapshot, .click, .domClick, .fill, .fillForm, .drag, .hover, .type, .pressKey,
              .uploadFile, .handleDialog, .console, .network, .screenshot, .performanceTrace:
             true
         case .status, .connect, .disconnect, .listPages, .selectPage, .closePage, .newPage, .call:
@@ -1204,6 +1206,19 @@ public enum BrowserMCPCallMapper {
                 "dblClick": arguments.getBool("double") ?? false,
                 "includeSnapshot": arguments.getBool("include_snapshot") ?? false,
             ]))
+        case .domClick:
+            return try BrowserMCPMappedCall(toolName: "evaluate_script", arguments: [
+                "function": """
+                (element) => {
+                  if (typeof element?.click !== 'function') {
+                    throw new Error('The selected element does not support a synthetic DOM click.');
+                  }
+                  element.click();
+                  return true;
+                }
+                """,
+                "args": [self.requiredString("uid", arguments)],
+            ])
         case .fill:
             return try BrowserMCPMappedCall(toolName: "fill", arguments: self.compact([
                 "uid": self.requiredString("uid", arguments),

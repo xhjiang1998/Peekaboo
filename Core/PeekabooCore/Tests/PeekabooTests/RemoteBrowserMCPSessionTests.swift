@@ -494,7 +494,7 @@ struct RemoteBrowserMCPSessionTests {
         let rawElement = try await first.execute(
             tool: firstTool,
             arguments: ToolArguments(raw: [
-                "action": "click",
+                "action": "dom_click",
                 "page_id": pageReference,
                 "uid": "1_0",
             ]))
@@ -504,7 +504,7 @@ struct RemoteBrowserMCPSessionTests {
         let clicked = try await first.execute(
             tool: firstTool,
             arguments: ToolArguments(raw: [
-                "action": "click",
+                "action": "dom_click",
                 "page_id": pageReference,
                 "uid": elementReference,
             ]))

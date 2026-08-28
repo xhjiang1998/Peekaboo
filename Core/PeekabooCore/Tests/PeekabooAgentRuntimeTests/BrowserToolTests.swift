@@ -261,6 +261,7 @@ struct BrowserToolTests {
         let sequence = try #require(client.executedSequences.first)
         #expect(sequence.map(\.toolName) == ["click", "type_text"])
         #expect(sequence[0].arguments["uid"] as? String == "7_9")
+        #expect(response.meta?.objectValue?["delivery_mode"] == .string("foreground"))
     }
 
     @Test
@@ -302,6 +303,7 @@ struct BrowserToolTests {
         #expect(meta["state"] == .string("dispatched_unverified"))
         #expect(meta["dispatch_state"] == .string("dispatched"))
         #expect(meta["dispatched_unit_count"] == .int(2))
+        #expect(meta["delivery_mode"] == .string("foreground"))
         #expect(meta["retry_safety"] == .string("unsafe"))
         #expect(meta["retry_safe"] == .bool(false))
         #expect(meta["mutation_dispatched"] == .bool(true))
@@ -328,6 +330,7 @@ struct BrowserToolTests {
         let meta = try #require(response.meta?.objectValue)
         #expect(meta["state"] == .string("indeterminate"))
         #expect(meta["dispatch_state"] == .string("may_have_dispatched"))
+        #expect(meta["delivery_mode"] == .string("foreground"))
         #expect(meta["retry_safe"] == .bool(false))
         #expect(meta["requires_fresh_observation"] == .bool(true))
         #expect(meta["provider_meta"] == nil)
@@ -483,6 +486,7 @@ struct BrowserToolTests {
         #expect(meta["state"] == .string("indeterminate"))
         #expect(meta["dispatch_state"] == .string("may_have_dispatched"))
         #expect(meta["dispatched_unit_count"] == nil)
+        #expect(meta["delivery_mode"] == .string("foreground"))
         #expect(meta["retry_safety"] == .string("unsafe"))
         #expect(meta["requires_fresh_observation"] == .bool(true))
     }
@@ -1129,6 +1133,83 @@ extension BrowserToolTests {
         #expect(response.isError)
         #expect(Self.text(from: response).contains("provider-child epoch"))
         #expect(!client.disconnected)
+    }
+}
+
+@MainActor
+struct BrowserPointerRouteTests {
+    @Test
+    func `Browser DOM click maps one exact element to a synthetic script`() throws {
+        let call = try BrowserMCPCallMapper.map(
+            action: .domClick,
+            arguments: ToolArguments(raw: ["page_id": 12, "uid": "12_4"]))
+
+        #expect(call.toolName == "evaluate_script")
+        #expect(call.arguments["pageId"] as? Int == 12)
+        #expect(call.arguments["args"] as? [String] == ["12_4"])
+        let function = try #require(call.arguments["function"] as? String)
+        #expect(function.contains("element.click()"))
+        #expect(function.contains("return true"))
+        #expect(!function.contains("Input."))
+        #expect(!function.contains("mouse."))
+    }
+
+    @Test
+    func `Browser pointer audit stays aligned with central user activation policy`() {
+        #expect(BrowserToolActionSemantics.trustedPointerToolNames == [
+            "click",
+            "click_at",
+            "drag",
+            "fill",
+            "fill_form",
+            "hover",
+            "upload_file",
+        ])
+        for toolName in BrowserToolActionSemantics.trustedPointerToolNames {
+            let arguments: [String: Any] = toolName == "fill_form"
+                ? ["elements": [["uid": "1_0", "value": "true"]]]
+                : [:]
+            #expect(BrowserMCPUserActivationPolicy.decision(for: BrowserMCPMappedCall(
+                toolName: toolName,
+                arguments: arguments)).requiresForegroundAuthority)
+        }
+        let domClick = try? BrowserMCPCallMapper.map(
+            action: .domClick,
+            arguments: ToolArguments(raw: ["page_id": 1, "uid": "1_0"]))
+        #expect(domClick?.toolName == "evaluate_script")
+        #expect(domClick.map(BrowserMCPUserActivationPolicy.decision(for:))?.requiresForegroundAuthority == true)
+    }
+
+    @Test
+    func `background Browser pointer routes refuse before provider entry`() async throws {
+        let client = ConnectionPolicyBrowserMCPClient()
+        let tool = BrowserTool(client: client, executionPolicy: .backgroundOnly)
+        let requests: [[String: Any]] = [
+            ["action": "click", "page_id": 1, "uid": "1_1"],
+            ["action": "fill", "page_id": 1, "uid": "1_1", "value": "x"],
+            ["action": "fill_form", "page_id": 1, "mcp_args_json": #"{"elements":[{"uid":"1_1","value":"true"}]}"#],
+            ["action": "drag", "page_id": 1, "uid": "1_1", "to_uid": "1_2"],
+            ["action": "hover", "page_id": 1, "uid": "1_1"],
+            ["action": "type", "page_id": 1, "uid": "1_1", "text": "x"],
+            ["action": "press_key", "page_id": 1, "uid": "1_1", "key": "Enter"],
+            ["action": "upload_file", "page_id": 1, "uid": "1_1", "path": "/tmp/x"],
+            ["action": "dom_click", "page_id": 1, "uid": "1_1"],
+            ["action": "call", "mcp_tool": "evaluate_script", "page_id": 1],
+        ] + BrowserToolActionSemantics.trustedPointerToolNames.sorted().map { toolName in
+            ["action": "call", "mcp_tool": toolName, "page_id": 1]
+        }
+
+        for request in requests {
+            let response = try await tool.execute(arguments: ToolArguments(raw: request))
+            #expect(response.isError)
+            let meta = try #require(response.meta?.objectValue)
+            #expect(meta["refusal_reason"] == .string("foreground_consent_required"))
+            #expect(meta["dispatch_state"] == .string("none"))
+            #expect(meta["mutation_dispatched"] == .bool(false))
+            #expect(meta["retry_safe"] == .bool(true))
+        }
+        #expect(client.connectionPolicies.isEmpty)
+        #expect(client.executedTools.isEmpty)
     }
 }
 

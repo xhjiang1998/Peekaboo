@@ -180,6 +180,30 @@ struct MCPWrapperCommandBindingTests {
     }
 
     @Test
+    func `Browser DOM click requires explicit foreground authority`() throws {
+        let background = try CommanderCLIBinder.instantiateCommand(
+            ofType: BrowserCommand.self,
+            parsedValues: ParsedValues(
+                positional: ["dom-click"],
+                options: ["pageId": ["7"], "uid": ["7_1"]],
+                flags: []
+            )
+        )
+        let foreground = try CommanderCLIBinder.instantiateCommand(
+            ofType: BrowserCommand.self,
+            parsedValues: ParsedValues(
+                positional: ["dom-click"],
+                options: ["pageId": ["7"], "uid": ["7_1"]],
+                flags: ["foreground"]
+            )
+        )
+
+        #expect(background.toolExecutionPolicy == .backgroundOnly)
+        #expect(foreground.toolExecutionPolicy == .foregroundAllowed)
+        #expect(BrowserCommand.actionMayMutate("dom-click"))
+    }
+
+    @Test
     func `See tree command binding`() throws {
         let parsed = ParsedValues(
             positional: [],

@@ -41,6 +41,13 @@ In `--json` output, canonical action outcome, effect, retry safety, mutation-dis
 metadata are projected into the standard root CLI envelope. The original MCP metadata remains under `data.meta` for
 tool-specific consumers.
 
+On macOS, the pinned Chrome provider's trusted pointer routes can activate a standalone browser window. Background mode
+therefore refuses `click`, `fill`, `fill-form`, `drag`, `hover`, `type`, `press-key`, and `upload-file` before provider
+dispatch; the form, keyboard, and upload wrappers can reach the same pointer path internally. `dom-click` executes one
+receipt-bound `element.click()` against a fresh element reference without CDP or Puppeteer pointer input, but the pinned
+provider runs its script through user-gesture evaluation. It is therefore also foreground-only and can grant transient
+browser user activation. Pass `--foreground` only when that authority is intentional.
+
 Browser state is owned by one current-build reusable daemon across CLI invocations. Channel connection requires exactly
 one running official Google-signed Chrome process (Team ID `EQHXZ8M8AV`). Peekaboo pins the signed channel identifier,
 Team ID, and CDHash to its PID generation, safely reads that channel's standard `DevToolsActivePort`, proves its unique

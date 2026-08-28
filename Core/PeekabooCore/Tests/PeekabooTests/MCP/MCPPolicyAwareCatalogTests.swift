@@ -1,4 +1,5 @@
 import MCP
+import PeekabooFoundation
 import TachikomaMCP
 import Testing
 @testable import PeekabooAgentRuntime
@@ -139,7 +140,7 @@ struct MCPPolicyAwareCatalogTests {
             BrowserMCPUserActivationPolicy.backgroundCatalogActions.map(\.rawValue)))
         for hidden in [
             BrowserAction.connect, .listPages, .selectPage, .closePage, .newPage, .navigate, .waitFor, .snapshot,
-            .click, .fill, .fillForm, .drag, .hover, .type, .pressKey, .uploadFile, .handleDialog,
+            .click, .domClick, .fill, .fillForm, .drag, .hover, .type, .pressKey, .uploadFile, .handleDialog,
         ] {
             #expect(!actions.contains(.string(hidden.rawValue)))
         }
@@ -167,12 +168,24 @@ struct MCPPolicyAwareCatalogTests {
             return
         }
         #expect(foregroundActions.contains(.string(BrowserAction.connect.rawValue)))
-        #expect(foregroundActions.contains(.string(BrowserAction.listPages.rawValue)))
-        #expect(foregroundActions.contains(.string(BrowserAction.snapshot.rawValue)))
+        for action in BrowserAction.allCases {
+            #expect(foregroundActions.contains(.string(action.rawValue)))
+        }
         #expect(foregroundProperties["browser_url"] != nil)
         #expect(foregroundProperties["uid"] != nil)
         #expect(foregroundProperties["message_id"] != nil)
         #expect(foregroundProperties["url"] != nil)
+        #expect(foregroundProperties["double"] != nil)
+        #expect(foregroundProperties["to_uid"] != nil)
+        guard case let .object(foregroundRawTool)? = foregroundProperties["mcp_tool"],
+              case let .array(foregroundRawTools)? = foregroundRawTool["enum"]
+        else {
+            Issue.record("Expected foreground browser raw-tool enum")
+            return
+        }
+        for toolName in BrowserToolActionSemantics.trustedPointerToolNames {
+            #expect(foregroundRawTools.contains(.string(toolName)))
+        }
         #expect(foregroundTool.description.contains("accept Chrome's remote debugging prompt"))
         #expect(foregroundTool.description.contains("user activation"))
     }

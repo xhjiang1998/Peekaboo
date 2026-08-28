@@ -82,6 +82,23 @@ public enum BrowserToolActionSemantics: Equatable, Sendable {
         .union(BrowserToolActionSemantics.mutatingToolNames)
         .union(BrowserToolActionSemantics.argumentDependentToolNames)
 
+    // chrome-devtools-mcp-contract:trusted-pointer-begin
+    /// Pinned provider tools that can reach Puppeteer's trusted pointer path.
+    ///
+    /// `fill` and `fill_form` click checkable controls, while `upload_file` falls back to a click when direct upload
+    /// is unavailable. On macOS, standalone Chromium can activate its native window for these routes, so callers must
+    /// not describe them as background delivery without a separate physical proof.
+    public static let trustedPointerToolNames: Set<String> = [
+        "click",
+        "click_at",
+        "drag",
+        "fill",
+        "fill_form",
+        "hover",
+        "upload_file",
+    ]
+    // chrome-devtools-mcp-contract:trusted-pointer-end
+
     public static func classify(
         toolName: String,
         booleanArgument: (String) -> Bool?) -> Self?
