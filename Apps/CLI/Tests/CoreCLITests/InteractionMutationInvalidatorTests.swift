@@ -128,6 +128,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Command wrapper uses completion cutoff unless success preserves a fresh observation`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = InMemorySnapshotManager()
         let original = try await snapshots.createSnapshot()
         let runtime = CommandRuntime(
@@ -138,7 +140,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
 
         await #expect(throws: TestCommandError.self) {
@@ -466,6 +471,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Remote coordinator rejects a host observation certificate that forbids preservation`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = InMemorySnapshotManager()
         let runtime = CommandRuntime(
             configuration: .init(
@@ -476,7 +483,10 @@ struct InteractionMutationInvalidatorTests {
                 inputStrategy: nil
             ),
             services: PeekabooServices(snapshotManager: snapshots),
-            selectedRemoteSocketPath: "/tmp/selected.sock"
+            selectedRemoteSocketPath: "/tmp/selected.sock",
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
         let snapshotID = try await snapshots.createSnapshot()
         let scope = MCPToolSnapshotMutationScope(
@@ -497,6 +507,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Command wrapper retries failed invalidation with the original cutoff`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = RetrySnapshotManager()
         let runtime = CommandRuntime(
             configuration: .init(
@@ -506,7 +518,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
 
         let result = try await CommanderRuntimeExecutor.runWithImplicitSnapshotInvalidation(
@@ -528,6 +543,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Successful command remains successful when snapshot invalidation fails twice`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = RetrySnapshotManager(firstInvalidationAction: .alwaysFail)
         let runtime = CommandRuntime(
             configuration: .init(
@@ -537,7 +554,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
 
         try await CommanderRuntimeExecutor.runWithImplicitSnapshotInvalidation(
@@ -586,6 +606,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Command wrapper makes one retry after direct invalidation failure`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = RetrySnapshotManager(firstInvalidationAction: .alwaysFail)
         let runtime = CommandRuntime(
             configuration: .init(
@@ -595,7 +617,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
         runtime.beginInteractionMutation()
         let cutoff = Date()
@@ -623,6 +648,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Operation failure remains primary when snapshot cleanup fails twice`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = RetrySnapshotManager(firstInvalidationAction: .alwaysFail)
         let runtime = CommandRuntime(
             configuration: .init(
@@ -632,7 +659,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
 
         await #expect(throws: TestCommandError.self) {
@@ -651,6 +681,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Successful capture focus preserves snapshots created after focus completion`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = InMemorySnapshotManager()
         let runtime = CommandRuntime(
             configuration: .init(
@@ -660,7 +692,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
         var freshSnapshot: String?
 
@@ -678,6 +713,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Failed capture focus invalidates snapshots through command completion`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = InMemorySnapshotManager()
         let runtime = CommandRuntime(
             configuration: .init(
@@ -687,7 +724,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
         var focusSnapshot: String?
 
@@ -709,6 +749,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Action mutation reopens a completed capture focus boundary`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = InMemorySnapshotManager()
         let runtime = CommandRuntime(
             configuration: .init(
@@ -718,7 +760,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
 
         try await CommanderRuntimeExecutor.runWithImplicitSnapshotInvalidation(
@@ -735,6 +780,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Command cancellation invalidates snapshots after a completed focus boundary`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = InMemorySnapshotManager()
         let runtime = CommandRuntime(
             configuration: .init(
@@ -744,7 +791,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
 
         let task = Task { @MainActor in
@@ -767,6 +817,8 @@ struct InteractionMutationInvalidatorTests {
 
     @Test
     func `Cancellation during success cleanup forces completion invalidation`() async throws {
+        let desktop = try CLIDesktopFixture()
+        defer { desktop.removeDirectory() }
         let snapshots = RetrySnapshotManager(firstInvalidationAction: .cancelAfterSuccess)
         let runtime = CommandRuntime(
             configuration: .init(
@@ -776,7 +828,10 @@ struct InteractionMutationInvalidatorTests {
                 captureEnginePreference: nil,
                 inputStrategy: nil
             ),
-            services: PeekabooServices(snapshotManager: snapshots)
+            services: PeekabooServices(snapshotManager: snapshots),
+            interactionMutationTracker: InteractionMutationTracker(
+                desktopMutationWatermarkStore: desktop.watermarkStore
+            )
         )
 
         let task = Task { @MainActor in
