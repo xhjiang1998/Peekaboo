@@ -1013,6 +1013,7 @@ extension BrowserToolCapabilityIntegrationTests {
             clipboard: services.clipboard,
             browser: client,
             snapshotMutationCoordinator: coordinator,
+            snapshotOwner: MCPToolSnapshotOwner(),
             executionPolicy: executionPolicy)
     }
 
