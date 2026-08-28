@@ -401,7 +401,8 @@ public struct AgentSystemPrompt {
                 "never emit focus or switch payloads in this session."
         }
         let webNavigationGuidance = allowsForeground
-            ? "When starting a separate web task, open a new page only through the foreground-authorized browser route."
+            ? "When starting a separate Chrome web task, open a new page only through the foreground-authorized " +
+            "browser route."
             : "Do not open or navigate browser pages; request foreground authority when the task requires either."
         return """
         **Error Recovery**

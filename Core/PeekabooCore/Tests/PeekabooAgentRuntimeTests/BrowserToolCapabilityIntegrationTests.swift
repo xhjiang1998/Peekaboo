@@ -197,9 +197,9 @@ struct BrowserToolCapabilityIntegrationTests {
         #expect(call.arguments["pageId"] as? Int == 7)
         #expect(call.arguments["args"] as? [String] == ["1_0"])
         #expect(call.arguments["uid"] as? String == "domain-value")
-        #expect(coordinator.sharedPrepareCount == 1)
+        #expect(coordinator.sharedPrepareCount == 3)
         #expect(coordinator.concurrentPrepareCount == 0)
-        #expect(coordinator.completionCount == 1)
+        #expect(coordinator.completionCount == 3)
     }
 
     @Test

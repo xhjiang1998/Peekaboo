@@ -184,7 +184,7 @@ struct AgentSystemPromptTests {
     }
 
     @Test
-    func `foreground prompt identifies trusted browser pointer posture`() {
+    func `foreground prompt scopes browser navigation to Chrome and preserves Safari`() {
         guard #available(macOS 14.0, *) else { return }
         let prompt = AgentSystemPrompt.generate(executionPolicy: .foregroundAllowed)
 
@@ -192,7 +192,8 @@ struct AgentSystemPromptTests {
         #expect(prompt.contains("only when foreground browser interaction is intentional"))
         #expect(prompt.contains("`dom_click` avoids Puppeteer pointer input"))
         #expect(prompt.contains("must remain foreground-authorized"))
-        #expect(prompt.contains("open a new page only through the foreground-authorized browser route"))
+        #expect(prompt.contains("When starting a separate Chrome web task, open a new page only through"))
+        #expect(prompt.contains(#""action": "open", "name": "Safari""#))
     }
 
     @Test

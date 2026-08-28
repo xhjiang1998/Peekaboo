@@ -240,31 +240,6 @@ struct BrowserToolTests {
     }
 
     @Test
-    func `Browser tool sends targeted type as one client-owned sequence`() async throws {
-        let outcome = DesktopActionOutcome.dispatchedUnverified(
-            delivery: .init(mechanism: .browserProtocol, mode: .background),
-            evidence: .deliveryAccepted,
-            unitCount: DesktopActionOutcome.DispatchUnitCount(2))
-        let client = OutcomeBrowserMCPClient(result: .init(
-            payload: .text("typed"),
-            outcome: outcome))
-        let tool = BrowserTool(client: client, executionPolicy: .unrestricted)
-
-        let response = try await tool.execute(arguments: ToolArguments(raw: [
-            "action": "type",
-            "page_id": 7,
-            "uid": "7_9",
-            "text": "typed",
-        ]))
-
-        #expect(!response.isError)
-        let sequence = try #require(client.executedSequences.first)
-        #expect(sequence.map(\.toolName) == ["click", "type_text"])
-        #expect(sequence[0].arguments["uid"] as? String == "7_9")
-        #expect(response.meta?.objectValue?["delivery_mode"] == .string("foreground"))
-    }
-
-    @Test
     func `Browser tool namespaces provider metadata and strips reserved semantic claims`() async throws {
         let outcome = DesktopActionOutcome.dispatchedUnverified(
             route: .bridge,
@@ -1138,6 +1113,31 @@ extension BrowserToolTests {
 
 @MainActor
 struct BrowserPointerRouteTests {
+    @Test
+    func `Browser tool sends targeted type as one client-owned sequence`() async throws {
+        let outcome = DesktopActionOutcome.dispatchedUnverified(
+            delivery: .init(mechanism: .browserProtocol, mode: .background),
+            evidence: .deliveryAccepted,
+            unitCount: DesktopActionOutcome.DispatchUnitCount(2))
+        let client = OutcomeBrowserMCPClient(result: .init(
+            payload: .text("typed"),
+            outcome: outcome))
+        let tool = BrowserTool(client: client, executionPolicy: .unrestricted)
+
+        let response = try await tool.execute(arguments: ToolArguments(raw: [
+            "action": "type",
+            "page_id": 7,
+            "uid": "7_9",
+            "text": "typed",
+        ]))
+
+        #expect(!response.isError)
+        let sequence = try #require(client.executedSequences.first)
+        #expect(sequence.map(\.toolName) == ["click", "type_text"])
+        #expect(sequence[0].arguments["uid"] as? String == "7_9")
+        #expect(response.meta?.objectValue?["delivery_mode"] == .string("foreground"))
+    }
+
     @Test
     func `Browser DOM click maps one exact element to a synthetic script`() throws {
         let call = try BrowserMCPCallMapper.map(

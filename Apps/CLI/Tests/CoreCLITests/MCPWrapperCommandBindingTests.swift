@@ -200,7 +200,8 @@ struct MCPWrapperCommandBindingTests {
 
         #expect(background.toolExecutionPolicy == .backgroundOnly)
         #expect(foreground.toolExecutionPolicy == .foregroundAllowed)
-        #expect(BrowserCommand.actionMayMutate("dom-click"))
+        #expect(background.runtimeOptions.usesPerToolSnapshotInvalidation)
+        #expect(foreground.runtimeOptions.usesPerToolSnapshotInvalidation)
     }
 
     @Test
