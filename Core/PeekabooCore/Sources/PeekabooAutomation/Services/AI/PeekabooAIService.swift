@@ -172,10 +172,16 @@ private final class PeekabooCustomProviderModel: PeekabooCustomProviderIdentityP
 /// AI service for handling model interactions and AI-powered features
 @MainActor
 public final class PeekabooAIService {
+    typealias TextGenerator = (
+        _ model: LanguageModel,
+        _ messages: [ModelMessage],
+        _ configuration: TachikomaConfiguration) async throws -> GenerateTextResult
+
     private let configuration: ConfigurationManager
     private let resolvedModels: [LanguageModel]
     private let defaultModel: LanguageModel
     private let defaultVisionModel: LanguageModel?
+    private let textGenerator: TextGenerator
 
     /// Exposed for tests (internal)
     var resolvedDefaultModel: LanguageModel {
@@ -187,8 +193,21 @@ public final class PeekabooAIService {
         self.defaultVisionModel
     }
 
-    public init(configuration: ConfigurationManager = .shared) {
+    public convenience init(configuration: ConfigurationManager = .shared) {
+        self.init(configuration: configuration) { model, messages, configuration in
+            try await Tachikoma.generateText(
+                model: model,
+                messages: messages,
+                configuration: configuration)
+        }
+    }
+
+    init(
+        configuration: ConfigurationManager = .shared,
+        textGenerator: @escaping TextGenerator)
+    {
         self.configuration = configuration
+        self.textGenerator = textGenerator
         ConfigurationManager.configureTachikomaProfileDirectory()
         _ = configuration.loadConfiguration()
         configuration.applyAIProviderKeys()
@@ -201,6 +220,25 @@ public final class PeekabooAIService {
         public let provider: String
         public let model: String
         public let text: String
+    }
+
+    public struct ConversationTurn: Equatable, Sendable {
+        public enum Role: Equatable, Sendable {
+            case user
+            case assistant
+        }
+
+        public let role: Role
+        public let text: String
+
+        public init(role: Role, text: String) {
+            self.role = role
+            self.text = text
+        }
+    }
+
+    public enum ImageConversationError: Error, Equatable {
+        case missingUserTurn
     }
 
     /// Analyze an image with a question using AI
@@ -222,10 +260,10 @@ public final class PeekabooAIService {
         let imageContent = ModelMessage.ContentPart.ImageContent(data: base64String, mimeType: "image/png")
         let messages = [ModelMessage.user(text: question, images: [imageContent])]
 
-        let response = try await Tachikoma.generateText(
-            model: selectedModel,
-            messages: messages,
-            configuration: self.tachikomaConfiguration(for: selectedModel))
+        let response = try await self.textGenerator(
+            selectedModel,
+            messages,
+            self.tachikomaConfiguration(for: selectedModel))
 
         let (provider, modelName) = Self.providerAndModelName(for: selectedModel)
 
@@ -235,6 +273,101 @@ public final class PeekabooAIService {
             imageSize: Self.imageSize(from: imageData))
 
         return AnalysisResult(provider: provider, model: modelName, text: normalizedText)
+    }
+
+    /// Continue a screenshot-backed conversation. The image is attached only to the
+    /// first user message; later turns remain ordinary text messages.
+    public func analyzeImageConversation(
+        imageData: Data,
+        turns: [ConversationTurn],
+        model: LanguageModel? = nil) async throws -> AnalysisResult
+    {
+        let selectedModel = try self.resolveVisionModel(model)
+        let messages = try Self.makeImageConversationMessages(
+            imageData: imageData,
+            turns: turns)
+        let response = try await self.textGenerator(
+            selectedModel,
+            messages,
+            self.tachikomaConfiguration(for: selectedModel))
+        let (provider, modelName) = Self.providerAndModelName(for: selectedModel)
+        let normalizedText = Self.normalizeCoordinateTextIfNeeded(
+            response.text,
+            model: modelName,
+            imageSize: Self.imageSize(from: imageData))
+
+        return AnalysisResult(provider: provider, model: modelName, text: normalizedText)
+    }
+
+    static func makeImageConversationMessages(
+        imageData: Data,
+        turns: [ConversationTurn]) throws -> [ModelMessage]
+    {
+        guard let firstUserIndex = turns.firstIndex(where: { $0.role == .user }) else {
+            throw ImageConversationError.missingUserTurn
+        }
+
+        var retainedTurns = Array(turns[firstUserIndex...])
+        if retainedTurns.count > 20 {
+            retainedTurns = [retainedTurns[0]] + Array(retainedTurns.dropFirst().suffix(19))
+        }
+        retainedTurns = Self.trimmingConversationText(retainedTurns, limit: 32_000)
+
+        let imageContent = ModelMessage.ContentPart.ImageContent(
+            data: imageData.base64EncodedString(),
+            mimeType: "image/png")
+        return retainedTurns.enumerated().map { index, turn in
+            switch turn.role {
+            case .user where index == 0:
+                ModelMessage.user(text: turn.text, images: [imageContent])
+            case .user:
+                ModelMessage.user(turn.text)
+            case .assistant:
+                ModelMessage.assistant(turn.text)
+            }
+        }
+    }
+
+    private static func trimmingConversationText(
+        _ turns: [ConversationTurn],
+        limit: Int) -> [ConversationTurn]
+    {
+        var retainedTurns = turns
+        while Self.characterCount(in: retainedTurns) > limit, retainedTurns.count > 2 {
+            retainedTurns.remove(at: 1)
+        }
+
+        guard Self.characterCount(in: retainedTurns) > limit else {
+            return retainedTurns
+        }
+        guard retainedTurns.count > 1 else {
+            return [ConversationTurn(
+                role: retainedTurns[0].role,
+                text: String(retainedTurns[0].text.prefix(limit)))]
+        }
+
+        let first = retainedTurns[0]
+        let latest = retainedTurns[retainedTurns.count - 1]
+        let firstBudget: Int
+        if latest.text.count <= limit {
+            firstBudget = limit - latest.text.count
+        } else {
+            firstBudget = min(first.text.count, 1_000)
+        }
+        let trimmedFirst = ConversationTurn(
+            role: first.role,
+            text: String(first.text.prefix(firstBudget)))
+        let latestBudget = limit - trimmedFirst.text.count
+        let trimmedLatest = ConversationTurn(
+            role: latest.role,
+            text: String(latest.text.prefix(latestBudget)))
+        return [trimmedFirst, trimmedLatest]
+    }
+
+    private static func characterCount(in turns: [ConversationTurn]) -> Int {
+        turns.reduce(into: 0) { count, turn in
+            count += turn.text.count
+        }
     }
 
     /// Analyze an image file with a question
