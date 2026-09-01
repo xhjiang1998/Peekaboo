@@ -16,7 +16,7 @@ read_when:
 以下条件必须在业务实现验证前满足：
 
 1. 当前本地仓库从官方 `main@36413615e1f56f60629bca8718bfe100e4f2c60b` 创建个人 Fork/feature 分支；不向官方 `openclaw/Peekaboo` 推送。
-2. 使用 GitHub Actions `macos-26` 与包含 Swift 6.2 的完整 Xcode；用户本机不安装 Xcode。
+2. 使用 GitHub Actions `macos-15` ARM runner 与预装的 Xcode 26.3（Swift 6.2）；用户本机不安装 Xcode。
 3. 远程基线测试与 unsigned Debug build 成功，证明后续错误来自本次改动而非环境。
 4. 本机已准备一个支持 Vision 的 provider/API Key 或可用本地视觉模型，用于最终 E2E；凭据不写入仓库和测试。
 
@@ -172,5 +172,5 @@ T2/T4 先建立存储和 AI 可测试边界；T3/T7 涉及 AppKit 实机行为�
 - 五个 Git submodule 已从原工作区本地副本初始化，未修改依赖版本。
 - 本机 baseline unsigned Debug build 已执行并按预期失败：当前只有 `/Library/Developer/CommandLineTools`，没有完整 Xcode。
 - 本机 Swift package 测试门禁已执行并按预期失败：仓库要求 Swift tools 6.2，本机为 Swift 6.1.2。
-- 2026-09-01 用户确认“不装 Xcode，走远程构建”；测试与打包门禁迁移到 GitHub Actions `macos-26`。
+- 2026-09-01 用户确认“不装 Xcode，走远程构建”；测试与打包门禁迁移到 GitHub Actions `macos-15` ARM runner。
 - 个人 Fork `xhjiang1998/Peekaboo`、远程 `origin` 和分支 `feat/screenshot-ai-chat-mvp` 已创建；后续生产代码仍须先在远程观察失败测试，再补最小实现。
