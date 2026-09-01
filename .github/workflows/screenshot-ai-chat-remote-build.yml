@@ -1,0 +1,73 @@
+name: Screenshot AI Chat remote build
+
+on:
+  push:
+    branches:
+      - feat/screenshot-ai-chat-mvp
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: screenshot-ai-chat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Test and package Peekaboo.app
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.6.app /Applications/Xcode_26.5.app /Applications/Xcode_26.4.1.app /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app /Applications/Xcode.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "$candidate"
+              echo "DEVELOPER_DIR=${candidate}/Contents/Developer" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          xcodebuild -version
+          swift --version
+
+      - name: Run Mac app tests
+        working-directory: Apps/Mac
+        env:
+          PEEKABOO_CONFIG_DIR: ${{ runner.temp }}/peekaboo-mac-tests
+          PEEKABOO_CONFIG_DISABLE_MIGRATION: "1"
+          PEEKABOO_RUN_LIVE_AGENT_TESTS: "0"
+          PEEKABOO_INCLUDE_AUTOMATION_TESTS: "false"
+        run: swift test --no-parallel
+
+      - name: Build unsigned Peekaboo app
+        env:
+          PEEKABOO_BUILD_UNSIGNED: "1"
+          DERIVED_DATA_PATH: ${{ runner.temp }}/PeekabooDerivedData
+          DESTINATION: platform=macOS,arch=arm64
+        run: ./scripts/build-mac-debug.sh
+
+      - name: Package app
+        run: |
+          set -euo pipefail
+          app_path="$RUNNER_TEMP/PeekabooDerivedData/Build/Products/Debug/Peekaboo.app"
+          test -d "$app_path"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app_path" "$RUNNER_TEMP/Peekaboo.app.zip"
+          shasum -a 256 "$RUNNER_TEMP/Peekaboo.app.zip" > "$RUNNER_TEMP/Peekaboo.app.zip.sha256"
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Peekaboo-screenshot-ai-chat-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/Peekaboo.app.zip
+            ${{ runner.temp }}/Peekaboo.app.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
