@@ -38,6 +38,15 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Run screenshot AI conversation tests
+        working-directory: Core/PeekabooCore
+        env:
+          PEEKABOO_CONFIG_DIR: ${{ runner.temp }}/peekaboo-core-tests
+          PEEKABOO_CONFIG_DISABLE_MIGRATION: "1"
+          PEEKABOO_RUN_LIVE_AGENT_TESTS: "0"
+          PEEKABOO_INCLUDE_AUTOMATION_TESTS: "false"
+        run: swift test --no-parallel --filter PeekabooAIServiceConversationTests
+
       - name: Run Mac app tests
         working-directory: Apps/Mac
         env:
