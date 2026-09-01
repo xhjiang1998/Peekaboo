@@ -174,3 +174,5 @@ T2/T4 先建立存储和 AI 可测试边界；T3/T7 涉及 AppKit 实机行为�
 - 本机 Swift package 测试门禁已执行并按预期失败：仓库要求 Swift tools 6.2，本机为 Swift 6.1.2。
 - 2026-09-01 用户确认“不装 Xcode，走远程构建”；测试与打包门禁迁移到 GitHub Actions `macos-15` ARM runner。
 - 个人 Fork `xhjiang1998/Peekaboo`、远程 `origin` 和分支 `feat/screenshot-ai-chat-mvp` 已创建；后续生产代码仍须先在远程观察失败测试，再补最小实现。
+- 远程基线 run `33511362244` 已通过：Mac tests、unsigned App build、打包与 artifact 上传全部成功。
+- 基线 artifact 已下载到 `.artifacts/baseline-33511362244/Peekaboo.app.zip`，SHA-256 校验值为 `af6f3bb0567c3f200da0369b53dda5725214ad6facacad29e2a4a9973450c74c`。
