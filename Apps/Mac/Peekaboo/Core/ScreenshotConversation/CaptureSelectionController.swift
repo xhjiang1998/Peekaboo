@@ -130,8 +130,8 @@ private final class CaptureSelectionPanel: NSPanel {
             contentRect: screen.frame,
             styleMask: [.borderless],
             backing: .buffered,
-            defer: false,
-            screen: screen)
+            defer: false)
+        self.setFrame(screen.frame, display: false)
         self.level = .screenSaver
         self.backgroundColor = .clear
         self.isOpaque = false
