@@ -119,6 +119,42 @@ struct ScreenshotConversationServiceTests {
         #expect(try contextStore.imageData(for: staleSessionID) == nil)
     }
 
+    @Test
+    func `Screenshot session with missing context never becomes an ordinary agent session`() throws {
+        let fixture = self.makeFixture { _, _, _ in
+            ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+        }
+        defer { fixture.cleanup() }
+        let session = try fixture.service.createConversation(imageData: Data([1, 2, 3]))
+
+        try fixture.contextStore.removeContext(for: UUID(uuidString: session.id)!)
+
+        #expect(fixture.service.route(for: session.id) == .screenshotContextMissing)
+        #expect(fixture.service.isScreenshotSession(session.id))
+    }
+
+    @Test
+    func `Cancelling analysis cancels its task before allowing another request`() async throws {
+        let fixture = self.makeFixture { _, _, _ in
+            try await Task.sleep(for: .seconds(5))
+            return ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "late")
+        }
+        defer { fixture.cleanup() }
+        let session = try fixture.service.createConversation(imageData: Data([1, 2, 3]))
+        let analysis = Task {
+            try await fixture.service.analyze(sessionID: session.id)
+        }
+        await Task.yield()
+
+        fixture.service.cancel(sessionID: session.id)
+
+        #expect(fixture.service.status(for: session.id) == .cancelling)
+        await #expect(throws: CancellationError.self) {
+            try await analysis.value
+        }
+        #expect(fixture.service.status(for: session.id) == .idle)
+    }
+
     private func makeFixture(
         analyzer: @escaping ScreenshotConversationService.Analyzer) -> Fixture
     {

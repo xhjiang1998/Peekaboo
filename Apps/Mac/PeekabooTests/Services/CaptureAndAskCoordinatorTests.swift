@@ -150,6 +150,35 @@ struct CaptureAndAskCoordinatorTests {
         #expect(coordinator.state == .idle)
     }
 
+    @Test
+    func `A slow analysis does not block starting another screenshot`() async {
+        var selectionCount = 0
+        let selection = CaptureSelection(
+            start: CGPoint(x: 10, y: 20),
+            end: CGPoint(x: 210, y: 120),
+            displayID: 7)!
+        let coordinator = CaptureAndAskCoordinator(
+            permissionCheck: { true },
+            selectArea: {
+                selectionCount += 1
+                return selection
+            },
+            resolveCaptureRect: { $0 },
+            captureArea: { _ in Data([1, 2, 3]) },
+            createConversation: { _ in UUID().uuidString },
+            presentWindow: { _ in },
+            analyze: { _ in
+                try? await Task.sleep(for: .milliseconds(120))
+            })
+
+        coordinator.startCapture()
+        try? await Task.sleep(for: .milliseconds(20))
+        coordinator.startCapture()
+        try? await Task.sleep(for: .milliseconds(40))
+
+        #expect(selectionCount == 2)
+    }
+
     private enum TestFailure: Error {
         case analysis
     }

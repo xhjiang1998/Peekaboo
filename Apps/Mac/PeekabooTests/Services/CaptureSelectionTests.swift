@@ -42,4 +42,16 @@ struct CaptureSelectionTests {
 
         #expect((selection != nil) == isValid)
     }
+
+    @Test
+    func `Selection is clamped to the display where dragging started`() throws {
+        let selection = try #require(CaptureSelection.clamped(
+            start: CGPoint(x: 100, y: 100),
+            end: CGPoint(x: 900, y: -200),
+            within: CGRect(x: 0, y: 0, width: 800, height: 600),
+            displayID: 42))
+
+        #expect(selection.rect == CGRect(x: 100, y: 0, width: 700, height: 100))
+        #expect(selection.displayID == 42)
+    }
 }
