@@ -96,6 +96,17 @@ final class PeekabooSettings {
         }
     }
 
+    var customVisionProvider: String = "openai" {
+        didSet {
+            let canonicalProvider = self.canonicalProviderIdentifier(self.customVisionProvider)
+            if canonicalProvider != self.customVisionProvider {
+                self.customVisionProvider = canonicalProvider
+                return
+            }
+            self.save()
+        }
+    }
+
     var customVisionModel: String = "gpt-5.6" {
         didSet {
             self.save()
@@ -344,6 +355,41 @@ final class PeekabooSettings {
         return builtIn.filter { !customIDs.contains($0) } + custom.sorted()
     }
 
+    enum VisionModelSelectionError: Error, Equatable {
+        case unavailableModel(String)
+        case unsupportedModel(String)
+    }
+
+    var providerQualifiedVisionModel: String? {
+        guard self.useCustomVisionModel else { return nil }
+        let provider = self.customVisionProvider.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = self.customVisionModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !provider.isEmpty, !model.isEmpty else { return nil }
+        return "\(provider)/\(model)"
+    }
+
+    func resolvedVisionModel(using service: PeekabooAIService) throws -> LanguageModel? {
+        guard let selection = self.providerQualifiedVisionModel else { return nil }
+        guard let model = service.resolveConfiguredModel(selection) else {
+            throw VisionModelSelectionError.unavailableModel(selection)
+        }
+        guard model.supportsVision else {
+            throw VisionModelSelectionError.unsupportedModel(selection)
+        }
+        return model
+    }
+
+    func supportsVisionModel(provider: String, model: String) -> Bool {
+        if let customProvider = self.customProviders.first(where: {
+            $0.key.caseInsensitiveCompare(provider) == .orderedSame && $0.value.enabled
+        })?.value
+        {
+            return customProvider.models?[model]?.supportsVision ?? true
+        }
+
+        return LanguageModel.parse(from: "\(provider)/\(model)")?.supportsVision == true
+    }
+
     // Storage
     private let userDefaults = UserDefaults.standard
     private let keyPrefix = "peekaboo."
@@ -390,7 +436,17 @@ extension PeekabooSettings {
         let defaultModel = self.defaultModel(for: self.selectedProvider)
         self.selectedModel = self.userDefaults.string(forKey: self.namespaced("selectedModel")) ?? defaultModel
         self.useCustomVisionModel = self.userDefaults.bool(forKey: self.namespaced("useCustomVisionModel"))
-        self.customVisionModel = self.userDefaults.string(forKey: self.namespaced("customVisionModel")) ?? "gpt-5.6"
+        let storedVisionModel = self.userDefaults.string(
+            forKey: self.namespaced("customVisionModel")) ?? "gpt-5.6"
+        let storedVisionProvider = self.userDefaults.string(forKey: self.namespaced("customVisionProvider"))
+        if let qualifiedSelection = AIProviderParser.parse(storedVisionModel) {
+            self.customVisionProvider = self.canonicalProviderIdentifier(qualifiedSelection.provider)
+            self.customVisionModel = qualifiedSelection.model
+        } else {
+            self.customVisionProvider = storedVisionProvider.map(self.canonicalProviderIdentifier) ??
+                self.inferredVisionProvider(for: storedVisionModel) ?? self.selectedProvider
+            self.customVisionModel = storedVisionModel
+        }
 
         self.temperature = self.nonZeroDouble(forKey: "temperature", fallback: 0.7)
         self.maxTokens = self.nonZeroInt(forKey: "maxTokens", fallback: 16384)
@@ -452,6 +508,7 @@ extension PeekabooSettings {
         self.userDefaults.set(self.ollamaBaseURL, forKey: "\(self.keyPrefix)ollamaBaseURL")
         self.userDefaults.set(self.selectedModel, forKey: "\(self.keyPrefix)selectedModel")
         self.userDefaults.set(self.useCustomVisionModel, forKey: "\(self.keyPrefix)useCustomVisionModel")
+        self.userDefaults.set(self.customVisionProvider, forKey: "\(self.keyPrefix)customVisionProvider")
         self.userDefaults.set(self.customVisionModel, forKey: "\(self.keyPrefix)customVisionModel")
         self.userDefaults.set(self.temperature, forKey: "\(self.keyPrefix)temperature")
         self.userDefaults.set(self.maxTokens, forKey: "\(self.keyPrefix)maxTokens")
@@ -704,6 +761,23 @@ extension PeekabooSettings {
             } else {
                 "anthropic/claude-opus-5"
             }
+        }
+    }
+
+    private func inferredVisionProvider(for modelID: String) -> String? {
+        guard let model = LanguageModel.parse(from: modelID) else { return nil }
+        return switch model.providerName.lowercased() {
+        case "openai": "openai"
+        case "anthropic": "anthropic"
+        case "google": "google"
+        case "grok": "grok"
+        case "ollama": "ollama"
+        case "lmstudio": "lmstudio"
+        case "minimax": "minimax"
+        case "minimax china": "minimax-cn"
+        case "kimi": "kimi"
+        case "openrouter": "openrouter"
+        default: nil
         }
     }
 

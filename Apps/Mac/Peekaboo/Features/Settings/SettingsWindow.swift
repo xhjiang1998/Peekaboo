@@ -362,6 +362,15 @@ struct AgentSettingsView: View {
             selectedModel: self.settings.selectedModel)
     }
 
+    private var visionModels: [(provider: String, models: [(id: String, name: String)])] {
+        self.allModels.compactMap { group in
+            let models = group.models.filter {
+                self.settings.supportsVisionModel(provider: group.provider, model: $0.id)
+            }
+            return models.isEmpty ? nil : (group.provider, models)
+        }
+    }
+
     /// The configured provider/model pair can come from `~/.peekaboo/config.json` and
     /// may not be in the hardcoded catalog; append it so the picker never renders blank.
     static func appendingCurrentSelectionIfMissing(
@@ -603,14 +612,16 @@ struct AgentSettingsView: View {
 
                         Divider()
 
-                        ForEach(self.allModels, id: \.provider) { provider, models in
+                        ForEach(self.visionModels, id: \.provider) { provider, models in
                             Section(provider.capitalized) {
                                 ForEach(models, id: \.id) { model in
                                     Button {
                                         self.settings.useCustomVisionModel = true
+                                        self.settings.customVisionProvider = provider
                                         self.settings.customVisionModel = model.id
                                     } label: {
                                         if self.settings.useCustomVisionModel,
+                                           provider == self.settings.customVisionProvider,
                                            model.id == self.settings.customVisionModel
                                         {
                                             Label(model.name, systemImage: "checkmark")
@@ -623,7 +634,7 @@ struct AgentSettingsView: View {
                         }
                     } label: {
                         if self.settings.useCustomVisionModel {
-                            Text(self.modelDisplayName(forId: self.settings.customVisionModel))
+                            Text(self.visionModelDisplayName)
                         } else {
                             Text("Same as agent model")
                         }
@@ -639,8 +650,6 @@ struct AgentSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .opacity(self.settings.agentModeEnabled ? 1 : 0.5)
-            .disabled(!self.settings.agentModeEnabled)
         }
         .formStyle(.grouped)
         .task(id: self.settings.ollamaBaseURL) {
@@ -653,6 +662,12 @@ struct AgentSettingsView: View {
             return self.detectedOllamaModelOptions
         }
         return Self.defaultOllamaModels
+    }
+
+    private var visionModelDisplayName: String {
+        self.allModels.first(where: { $0.provider == self.settings.customVisionProvider })?
+            .models.first(where: { $0.id == self.settings.customVisionModel })?.name ??
+            self.settings.customVisionModel
     }
 
     private static let defaultOllamaModels: [(id: String, name: String)] = [

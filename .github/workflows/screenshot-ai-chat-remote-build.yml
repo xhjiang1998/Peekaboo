@@ -45,6 +45,7 @@ jobs:
             Apps/Mac/.build
             Core/PeekabooCore/.build
           key: ${{ runner.os }}-${{ runner.arch }}-xcode26-spm-${{ hashFiles('**/Package.resolved') }}
+          save-always: true
 
       - name: Run screenshot AI conversation tests
         working-directory: Core/PeekabooCore
