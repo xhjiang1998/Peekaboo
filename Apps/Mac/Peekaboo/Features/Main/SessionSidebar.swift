@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct SessionSidebar: View {
     @Environment(SessionStore.self) private var sessionStore
     @Environment(PeekabooAgent.self) private var agent
+    @Environment(ScreenshotConversationService.self) private var screenshotConversationService
 
     @Binding var selectedSessionId: String?
     @Binding var searchText: String
@@ -99,9 +100,18 @@ struct SessionSidebar: View {
         // Don't delete active session
         guard session.id != self.agent.currentSession?.id else { return }
 
-        self.sessionStore.sessions.removeAll { $0.id == session.id }
-        Task { @MainActor in
-            self.sessionStore.saveSessions()
+        if self.screenshotConversationService.isScreenshotSession(session.id) {
+            do {
+                try self.screenshotConversationService.deleteSession(sessionID: session.id)
+            } catch {
+                print("Failed to delete screenshot conversation: \(error.localizedDescription)")
+                return
+            }
+        } else {
+            self.sessionStore.sessions.removeAll { $0.id == session.id }
+            Task { @MainActor in
+                self.sessionStore.saveSessions()
+            }
         }
 
         if self.selectedSessionId == session.id {

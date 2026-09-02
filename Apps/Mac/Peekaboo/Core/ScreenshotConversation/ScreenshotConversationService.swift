@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os.log
 import PeekabooCore
 import Tachikoma
 
@@ -56,6 +57,7 @@ final class ScreenshotConversationService {
     private let contextStore: ScreenshotConversationContextStore
     private let modelResolver: ModelResolver
     private let analyzer: Analyzer
+    private let logger = Logger(subsystem: "boo.peekaboo.app", category: "ScreenshotConversation")
     private var statuses: [String: ScreenshotConversationStatus] = [:]
     private var activeRequestIDs: [String: UUID] = [:]
 
@@ -69,6 +71,7 @@ final class ScreenshotConversationService {
         self.contextStore = contextStore
         self.modelResolver = modelResolver
         self.analyzer = analyzer
+        self.cleanupStaleContexts()
     }
 
     convenience init(
@@ -203,6 +206,33 @@ final class ScreenshotConversationService {
     func cancel(sessionID: String) {
         self.activeRequestIDs[sessionID] = nil
         self.statuses[sessionID] = .idle
+    }
+
+    func deleteSession(sessionID: String) throws {
+        guard let id = UUID(uuidString: sessionID) else {
+            throw ScreenshotConversationServiceError.invalidSessionID
+        }
+
+        self.cancel(sessionID: sessionID)
+        try self.contextStore.removeContext(for: id)
+        self.statuses.removeValue(forKey: sessionID)
+        self.sessionStore.sessions.removeAll { $0.id == sessionID }
+        if self.sessionStore.currentSession?.id == sessionID {
+            self.sessionStore.currentSession = nil
+        }
+        self.sessionStore.saveSessions()
+    }
+
+    private func cleanupStaleContexts() {
+        let validSessionIDs = Set(self.sessionStore.sessions.compactMap { UUID(uuidString: $0.id) })
+        do {
+            let removedSessionIDs = try self.contextStore.cleanupContexts(keeping: validSessionIDs)
+            if !removedSessionIDs.isEmpty {
+                self.logger.info("Removed \(removedSessionIDs.count, privacy: .public) orphaned screenshot contexts")
+            }
+        } catch {
+            self.logger.error("Failed to clean orphaned screenshot contexts")
+        }
     }
 
     private static func turns(

@@ -118,6 +118,39 @@ final class ScreenshotConversationContextStore {
         return removedFileNames.sorted()
     }
 
+    @discardableResult
+    func cleanupContexts(keeping sessionIDs: Set<UUID>) throws -> [UUID] {
+        try self.createDirectoriesIfNeeded()
+
+        let contextURLs = try self.fileManager.contentsOfDirectory(
+            at: self.contextsDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles])
+        var removedSessionIDs: [UUID] = []
+
+        for contextURL in contextURLs where contextURL.pathExtension.lowercased() == "json" {
+            guard let sessionID = UUID(uuidString: contextURL.deletingPathExtension().lastPathComponent),
+                  let context = try? self.decoder.decode(
+                      ScreenshotConversationContext.self,
+                      from: Data(contentsOf: contextURL)),
+                  context.sessionID == sessionID,
+                  (try? Self.validate(imageFileName: context.imageFileName)) != nil
+            else {
+                try self.fileManager.removeItem(at: contextURL)
+                continue
+            }
+
+            guard !sessionIDs.contains(sessionID) else {
+                continue
+            }
+            try self.removeContext(for: sessionID)
+            removedSessionIDs.append(sessionID)
+        }
+
+        _ = try self.cleanupOrphanedImages()
+        return removedSessionIDs.sorted { $0.uuidString < $1.uuidString }
+    }
+
     private static func defaultRootDirectory(fileManager: FileManager) -> URL {
         fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Peekaboo", isDirectory: true)
