@@ -154,6 +154,10 @@ final class SessionStore {
     }
 
     func saveSessions() {
+        guard self.loadState != .failed else {
+            print("Skipped saving sessions because existing persistence could not be loaded")
+            return
+        }
         do {
             try FileManager.default.createDirectory(
                 at: self.storageURL.deletingLastPathComponent(),

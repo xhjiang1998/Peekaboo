@@ -57,6 +57,7 @@ struct SessionChatView: View {
                         if self.isScreenshotConversation {
                             ScreenshotPreviewCard(
                                 sessionID: self.session.id)
+                                .id(self.session.id)
                         }
 
                         ForEach(self.session.messages) { message in
