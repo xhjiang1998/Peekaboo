@@ -82,6 +82,7 @@ struct CaptureAndAskCoordinatorTests {
     @Test
     func `Missing screen recording permission stops before selection`() async {
         var didSelect = false
+        var reportedFailures: [CaptureAndAskFailure] = []
         let coordinator = CaptureAndAskCoordinator(
             permissionCheck: { false },
             selectArea: {
@@ -92,12 +93,37 @@ struct CaptureAndAskCoordinatorTests {
             captureArea: { _ in Data() },
             createConversation: { _ in "unused" },
             presentWindow: { _ in },
-            analyze: { _ in })
+            analyze: { _ in },
+            reportFailure: { reportedFailures.append($0) })
 
         await coordinator.performCapture()
 
         #expect(!didSelect)
         #expect(coordinator.state == .failed(.screenRecordingDenied))
+        #expect(reportedFailures == [.screenRecordingDenied])
+    }
+
+    @Test
+    func `Analysis failure stays in conversation without showing a modal alert`() async {
+        var reportedFailures: [CaptureAndAskFailure] = []
+        let selection = CaptureSelection(
+            start: CGPoint(x: 10, y: 20),
+            end: CGPoint(x: 210, y: 120),
+            displayID: 7)!
+        let coordinator = CaptureAndAskCoordinator(
+            permissionCheck: { true },
+            selectArea: { selection },
+            resolveCaptureRect: { $0 },
+            captureArea: { _ in Data([1, 2, 3]) },
+            createConversation: { _ in "screenshot-session" },
+            presentWindow: { _ in },
+            analyze: { _ in throw TestFailure.analysis },
+            reportFailure: { reportedFailures.append($0) })
+
+        await coordinator.performCapture()
+
+        #expect(coordinator.state == .failed(.analysisFailed))
+        #expect(reportedFailures.isEmpty)
     }
 
     @Test
@@ -122,5 +148,9 @@ struct CaptureAndAskCoordinatorTests {
 
         #expect(selectionCount == 1)
         #expect(coordinator.state == .idle)
+    }
+
+    private enum TestFailure: Error {
+        case analysis
     }
 }

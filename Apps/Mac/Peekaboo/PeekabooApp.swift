@@ -20,9 +20,10 @@ struct PeekabooApp: App {
             options: .init(copyArtifactsOnStore: true),
             desktopMutationWatermarkStore: DesktopMutationWatermarkStore()))
     // Core state - initialized together for proper dependencies
-    @State private var settings = PeekabooSettings()
-    @State private var sessionStore = SessionStore()
+    @State private var settings: PeekabooSettings
+    @State private var sessionStore: SessionStore
     @State private var permissions = Permissions()
+    @State private var screenshotConversationService: ScreenshotConversationService
 
     @State private var agent: PeekabooAgent?
 
@@ -31,6 +32,18 @@ struct PeekabooApp: App {
 
     /// Logger
     private let logger = Logger(subsystem: "boo.peekaboo.app", category: "PeekabooApp")
+
+    init() {
+        let settings = PeekabooSettings()
+        let sessionStore = SessionStore()
+        let contextStore = ScreenshotConversationContextStore()
+        self._settings = State(initialValue: settings)
+        self._sessionStore = State(initialValue: sessionStore)
+        self._screenshotConversationService = State(initialValue: ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            settings: settings))
+    }
 
     /// Use the confirmed file snapshot and established environment/config precedence, never an unsaved draft.
     private func configureTachikomaWithSettings() {
@@ -64,9 +77,6 @@ struct PeekabooApp: App {
                     // Set up window opening handler
                     self.appDelegate.windowOpener = { windowId in
                         Task { @MainActor in
-                            guard windowId != AgentSessionUI.mainWindowIdentifier ||
-                                AgentSessionUI.isAvailable(agentModeEnabled: self.settings.agentModeEnabled)
-                            else { return }
                             self.openWindow(id: windowId)
                         }
                     }
@@ -77,7 +87,8 @@ struct PeekabooApp: App {
                         settings: self.settings,
                         sessionStore: self.sessionStore,
                         permissions: self.permissions,
-                        agent: self.agent!)
+                        agent: self.agent!,
+                        screenshotConversationService: self.screenshotConversationService)
                     self.appDelegate.connectToState(context)
 
                     // Check permissions
@@ -92,42 +103,29 @@ struct PeekabooApp: App {
 
         // Main window - Powerful debugging and development interface
         WindowGroup("Peekaboo Sessions", id: "main") {
-            if AgentSessionUI.isAvailable(agentModeEnabled: self.settings.agentModeEnabled) {
-                SessionMainWindow()
-                    .environment(self.settings)
-                    .environment(self.sessionStore)
-                    .environment(self.permissions)
-                    .environment(
-                        self.agent ?? PeekabooAgent(
-                            settings: self.settings,
-                            sessionStore: self.sessionStore,
-                            services: self.services))
-                    .onReceive(NotificationCenter.default.publisher(for: .openMainWindow)) { _ in
-                        guard AgentSessionUI.isAvailable(agentModeEnabled: self.settings.agentModeEnabled) else {
-                            return
-                        }
-                        DispatchQueue.main.async {
-                            guard AgentSessionUI.isAvailable(agentModeEnabled: self.settings.agentModeEnabled) else {
-                                return
-                            }
-                            self.openWindow(id: AgentSessionUI.mainWindowIdentifier)
-                        }
+            SessionMainWindow()
+                .environment(self.settings)
+                .environment(self.sessionStore)
+                .environment(self.permissions)
+                .environment(self.screenshotConversationService)
+                .environment(
+                    self.agent ?? PeekabooAgent(
+                        settings: self.settings,
+                        sessionStore: self.sessionStore,
+                        services: self.services))
+                .onReceive(NotificationCenter.default.publisher(for: .openMainWindow)) { _ in
+                    DispatchQueue.main.async {
+                        self.openWindow(id: AgentSessionUI.mainWindowIdentifier)
                     }
-                    .onReceive(NotificationCenter.default.publisher(for: .startNewSession)) { _ in
-                        _ = self.sessionStore.createSession(title: "New Session")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .startNewSession)) { _ in
+                    _ = self.sessionStore.createSession(title: "New Session")
+                }
+                .onAppear {
+                    if let window = NSApp.keyWindow {
+                        window.identifier = NSUserInterfaceItemIdentifier(AgentSessionUI.mainWindowIdentifier)
                     }
-                    .onAppear {
-                        if let window = NSApp.keyWindow {
-                            window.identifier = NSUserInterfaceItemIdentifier(AgentSessionUI.mainWindowIdentifier)
-                        }
-                    }
-            } else {
-                Color.clear
-                    .frame(width: 1, height: 1)
-                    .onAppear {
-                        self.appDelegate.dismissAgentSessionUI()
-                    }
-            }
+                }
         }
         .windowResizability(.automatic)
         .defaultSize(width: 900, height: 700)
@@ -182,6 +180,7 @@ private struct AppStateConnectionContext {
     let sessionStore: SessionStore
     let permissions: Permissions
     let agent: PeekabooAgent
+    let screenshotConversationService: ScreenshotConversationService
 }
 
 @MainActor
@@ -204,6 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionStore: SessionStore?
     private var permissions: Permissions?
     private var agent: PeekabooAgent?
+    private var captureAndAskCoordinator: CaptureAndAskCoordinator?
 
     // Visualizer components
     var visualizerCoordinator: VisualizerCoordinator?
@@ -259,6 +259,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.sessionStore = context.sessionStore
         self.permissions = context.permissions
         self.agent = context.agent
+
+        if self.captureAndAskCoordinator == nil {
+            let windowPresenter = MainWindowPresenter(
+                sessionStore: context.sessionStore,
+                openWindow: { [weak self] in
+                    self?.openWindow(id: AgentSessionUI.mainWindowIdentifier)
+                })
+            self.captureAndAskCoordinator = CaptureAndAskCoordinator(
+                services: context.services,
+                selector: CaptureSelectionController(),
+                conversationService: context.screenshotConversationService,
+                windowPresenter: windowPresenter)
+        }
 
         if self.statusBarController == nil {
             self.statusBarController = StatusBarController(
@@ -426,14 +439,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.logger.info("Ignoring main window request in background Bridge host mode")
             return
         }
-        guard let settings = self.settings,
-              AgentSessionUI.isAvailable(agentModeEnabled: settings.agentModeEnabled)
-        else {
-            self.logger.info("Ignoring main window request because agent mode is disabled")
-            self.dismissAgentSessionUI()
-            return
-        }
-
         self.logger.info("showMainWindow called")
 
         // Ensure dock icon is visible
@@ -444,11 +449,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Find or create the main window
         DispatchQueue.main.async {
-            guard AgentSessionUI.isAvailable(agentModeEnabled: settings.agentModeEnabled) else {
-                self.dismissAgentSessionUI()
-                return
-            }
-
             self.logger.info("Looking for existing main window...")
 
             // First try to find an existing main window by identifier
@@ -501,13 +501,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openWindow(id: String) {
-        guard id != AgentSessionUI.mainWindowIdentifier ||
-            AgentSessionUI.isAvailable(agentModeEnabled: self.settings?.agentModeEnabled == true)
-        else {
-            self.dismissAgentSessionUI()
-            return
-        }
-
         self.logger.info("openWindow called with id: \(id)")
 
         // Ensure dock icon is visible
@@ -557,7 +550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateAgentSessionUIVisibility() {
         guard !AgentSessionUI.isAvailable(agentModeEnabled: self.settings?.agentModeEnabled == true) else { return }
-        self.dismissAgentSessionUI()
+        self.statusBarController?.dismissAgentUI()
     }
 
     func dismissAgentSessionUI() {
@@ -582,6 +575,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupKeyboardShortcuts() {
         // Set up global keyboard shortcuts using KeyboardShortcuts library
+        KeyboardShortcuts.onKeyDown(for: .captureAndAsk) { [weak self] in
+            self?.logger.info("Global shortcut triggered: captureAndAsk")
+            self?.captureAndAskCoordinator?.startCapture()
+        }
+
         KeyboardShortcuts.onKeyDown(for: .togglePopover) { [weak self] in
             self?.logger.info("Global shortcut triggered: togglePopover")
             self?.statusBarController?.togglePopover()

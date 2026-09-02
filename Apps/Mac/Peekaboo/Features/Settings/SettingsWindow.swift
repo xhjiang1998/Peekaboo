@@ -137,6 +137,7 @@ struct GeneralSettingsView: View {
             }
 
             Section("Shortcuts") {
+                KeyboardShortcuts.Recorder("Capture and ask AI", name: .captureAndAsk)
                 KeyboardShortcuts.Recorder("Toggle popover", name: .togglePopover)
                 KeyboardShortcuts.Recorder("Show main window", name: .showMainWindow)
                 KeyboardShortcuts.Recorder("Show Inspector", name: .showInspector)

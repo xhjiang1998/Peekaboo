@@ -10,6 +10,21 @@ enum CaptureAndAskFailure: Equatable, Sendable {
     case captureFailed
     case conversationFailed
     case analysisFailed
+
+    var userMessage: String {
+        switch self {
+        case .screenRecordingDenied:
+            "需要屏幕录制权限才能截取选区。"
+        case .selectionFailed:
+            "无法开始截图选区，请重试。"
+        case .captureFailed:
+            "截图失败，请重试。"
+        case .conversationFailed:
+            "无法保存截图，请检查磁盘空间后重试。"
+        case .analysisFailed:
+            "AI 分析失败，请在会话中重试。"
+        }
+    }
 }
 
 enum CaptureAndAskState: Equatable, Sendable {
@@ -48,6 +63,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
     private let presentWindow: WindowPresenter
     private let analyze: ConversationAnalyzer
     private let cancelSelection: () -> Void
+    private let reportFailure: (CaptureAndAskFailure) -> Void
     private var captureTask: Task<Void, Never>?
 
     init(
@@ -58,7 +74,8 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         createConversation: @escaping ConversationCreator,
         presentWindow: @escaping WindowPresenter,
         analyze: @escaping ConversationAnalyzer,
-        cancelSelection: @escaping () -> Void = {})
+        cancelSelection: @escaping () -> Void = {},
+        reportFailure: @escaping (CaptureAndAskFailure) -> Void = { _ in })
     {
         self.permissionCheck = permissionCheck
         self.selectArea = selectArea
@@ -68,6 +85,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         self.presentWindow = presentWindow
         self.analyze = analyze
         self.cancelSelection = cancelSelection
+        self.reportFailure = reportFailure
     }
 
     convenience init(
@@ -104,6 +122,9 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             },
             cancelSelection: {
                 selector.cancel()
+            },
+            reportFailure: { failure in
+                Self.showFailureAlert(failure)
             })
     }
 
@@ -125,7 +146,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
 
     func performCapture() async {
         guard await self.permissionCheck() else {
-            self.state = .failed(.screenRecordingDenied)
+            self.fail(.screenRecordingDenied)
             return
         }
 
@@ -138,7 +159,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             }
             selection = selectedArea
         } catch {
-            self.state = .failed(.selectionFailed)
+            self.fail(.selectionFailed)
             return
         }
 
@@ -152,7 +173,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         do {
             imageData = try await self.captureArea(self.resolveCaptureRect(selection.rect))
         } catch {
-            self.state = .failed(.captureFailed)
+            self.fail(.captureFailed)
             return
         }
 
@@ -160,7 +181,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         do {
             sessionID = try self.createConversation(imageData)
         } catch {
-            self.state = .failed(.conversationFailed)
+            self.fail(.conversationFailed)
             return
         }
 
@@ -176,7 +197,14 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             }
             self.state = .ready(sessionID: sessionID)
         } catch {
-            self.state = .failed(.analysisFailed)
+            self.fail(.analysisFailed, showsAlert: false)
+        }
+    }
+
+    private func fail(_ failure: CaptureAndAskFailure, showsAlert: Bool = true) {
+        self.state = .failed(failure)
+        if showsAlert {
+            self.reportFailure(failure)
         }
     }
 
@@ -187,5 +215,27 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             y: primaryScreenFrame.maxY - rect.maxY,
             width: rect.width,
             height: rect.height)
+    }
+
+    private static func showFailureAlert(_ failure: CaptureAndAskFailure) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = failure == .screenRecordingDenied ? "需要屏幕录制权限" : "截图 AI 未完成"
+        alert.informativeText = failure.userMessage
+        if failure == .screenRecordingDenied {
+            alert.addButton(withTitle: "打开系统设置")
+            alert.addButton(withTitle: "取消")
+        } else {
+            alert.addButton(withTitle: "好")
+        }
+        let response = alert.runModal()
+        guard failure == .screenRecordingDenied,
+              response == .alertFirstButtonReturn,
+              let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 }

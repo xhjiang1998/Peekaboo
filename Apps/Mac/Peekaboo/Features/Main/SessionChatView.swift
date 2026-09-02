@@ -1,3 +1,4 @@
+import AppKit
 import PeekabooCore
 import SwiftUI
 
@@ -6,6 +7,7 @@ import SwiftUI
 struct SessionChatView: View {
     @Environment(PeekabooAgent.self) private var agent
     @Environment(SessionStore.self) private var sessionStore
+    @Environment(ScreenshotConversationService.self) private var screenshotConversationService
 
     let session: ConversationSession
     @State private var inputText = ""
@@ -13,7 +15,24 @@ struct SessionChatView: View {
     @State private var hasConnectionError = false
 
     private var isCurrentSession: Bool {
-        self.session.id == self.agent.currentSession?.id
+        self.session.id == self.sessionStore.currentSession?.id
+    }
+
+    private var isScreenshotConversation: Bool {
+        self.screenshotConversationService.isScreenshotSession(self.session.id)
+    }
+
+    private var screenshotStatus: ScreenshotConversationStatus {
+        self.screenshotConversationService.status(for: self.session.id)
+    }
+
+    private var isScreenshotAnalyzing: Bool {
+        self.isScreenshotConversation && self.screenshotStatus == .analyzing
+    }
+
+    private var isActive: Bool {
+        guard self.isCurrentSession else { return false }
+        return self.isScreenshotConversation ? self.isScreenshotAnalyzing : self.agent.isProcessing
     }
 
     var body: some View {
@@ -21,7 +40,7 @@ struct SessionChatView: View {
             // Header
             SessionChatHeader(
                 session: self.session,
-                isActive: self.isCurrentSession && self.agent.isProcessing)
+                isActive: self.isActive)
 
             Divider()
 
@@ -29,6 +48,12 @@ struct SessionChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
+                        if self.isScreenshotConversation {
+                            ScreenshotPreviewCard(
+                                imageData: try? self.screenshotConversationService.imageData(
+                                    for: self.session.id))
+                        }
+
                         ForEach(self.session.messages) { message in
                             DetailedMessageRow(message: message)
                                 .id(message.id)
@@ -41,7 +66,20 @@ struct SessionChatView: View {
                         }
 
                         // Show progress indicator for active session
-                        if self.isCurrentSession, self.agent.isProcessing {
+                        if self.isCurrentSession, self.isScreenshotAnalyzing {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("正在分析截图…")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .id("screenshot-progress")
+                            .padding(.top, 8)
+                        } else if self.isCurrentSession,
+                                  !self.isScreenshotConversation,
+                                  self.agent.isProcessing
+                        {
                             ProgressIndicatorView(agent: self.agent)
                                 .id("progress")
                                 .padding(.top, 8)
@@ -68,7 +106,19 @@ struct SessionChatView: View {
                 Divider()
 
                 // Connection error banner
-                if self.hasConnectionError {
+                if self.isScreenshotConversation,
+                   case let .failed(message) = self.screenshotStatus
+                {
+                    ScreenshotAnalysisErrorBanner(
+                        message: message,
+                        retry: {
+                            Task {
+                                try? await self.screenshotConversationService.analyze(
+                                    sessionID: self.session.id)
+                            }
+                        })
+                    Divider()
+                } else if self.hasConnectionError {
                     ConnectionErrorBanner(
                         hasConnectionError: self.$hasConnectionError,
                         agent: self.agent,
@@ -92,7 +142,17 @@ struct SessionChatView: View {
                     self.submitInput()
                 }
 
-            if self.agent.isProcessing, self.isCurrentSession {
+            if self.isScreenshotAnalyzing {
+                Button(action: {
+                    self.screenshotConversationService.cancel(sessionID: self.session.id)
+                }, label: {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.title2)
+                        .foregroundColor(.red)
+                })
+                .buttonStyle(.plain)
+                .help("停止分析")
+            } else if self.agent.isProcessing, self.isCurrentSession {
                 // Show stop button during execution
                 Button(action: {
                     self.agent.cancelCurrentTask()
@@ -111,13 +171,17 @@ struct SessionChatView: View {
                     .foregroundColor(self.inputText.isEmpty ? .secondary : .accentColor)
             })
             .buttonStyle(.plain)
-            .disabled(self.inputText.isEmpty)
+            .disabled(self.inputText.isEmpty || self.isScreenshotAnalyzing)
         }
         .padding(12)
     }
 
     private var placeholderText: String {
-        if self.agent.isProcessing, self.isCurrentSession {
+        if self.isScreenshotAnalyzing {
+            "正在分析截图…"
+        } else if self.isScreenshotConversation {
+            "继续追问这张截图…"
+        } else if self.agent.isProcessing, self.isCurrentSession {
             "Ask a follow-up question..."
         } else {
             "Ask Peekaboo..."
@@ -132,6 +196,19 @@ struct SessionChatView: View {
 
         // Clear input immediately
         self.inputText = ""
+
+        if self.isScreenshotConversation {
+            Task {
+                do {
+                    try await self.screenshotConversationService.sendFollowUp(
+                        trimmedInput,
+                        sessionID: self.session.id)
+                } catch {
+                    print("Screenshot follow-up failed: \(error.localizedDescription)")
+                }
+            }
+            return
+        }
 
         if self.agent.isProcessing, self.isCurrentSession {
             // During execution, just add as a follow-up message
@@ -166,6 +243,57 @@ struct SessionChatView: View {
                 }
             }
         }
+    }
+}
+
+private struct ScreenshotPreviewCard: View {
+    let imageData: Data?
+
+    var body: some View {
+        Group {
+            if let imageData, let image = NSImage(data: imageData) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("截图上下文", systemImage: "viewfinder")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 560, maxHeight: 280, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            } else {
+                Label("原截图已丢失，请重新截图", systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .padding(10)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ScreenshotAnalysisErrorBanner: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.red)
+            Spacer()
+            Button("重试", action: self.retry)
+                .buttonStyle(.link)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color.red.opacity(0.08))
     }
 }
 
