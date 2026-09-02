@@ -4,6 +4,12 @@ import PeekabooCore
 
 // MARK: - Session Management
 
+enum SessionStoreLoadState: Equatable {
+    case missing
+    case loaded
+    case failed
+}
+
 /// Manages conversation sessions with automatic persistence.
 ///
 /// Sessions are automatically saved to `~/Library/Application Support/Peekaboo/sessions.json`
@@ -14,6 +20,7 @@ import PeekabooCore
 final class SessionStore {
     var sessions: [ConversationSession] = []
     var currentSession: ConversationSession?
+    private(set) var loadState: SessionStoreLoadState = .missing
 
     private let titleGenerator = SessionTitleGenerator()
 
@@ -129,14 +136,19 @@ final class SessionStore {
     }
 
     private func loadSessions() {
-        guard FileManager.default.fileExists(atPath: self.storageURL.path) else { return }
+        guard FileManager.default.fileExists(atPath: self.storageURL.path) else {
+            self.loadState = .missing
+            return
+        }
 
         do {
             let data = try Data(contentsOf: storageURL)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             self.sessions = try decoder.decode([ConversationSession].self, from: data)
+            self.loadState = .loaded
         } catch {
+            self.loadState = .failed
             print("Failed to load sessions: \(error)")
         }
     }
@@ -150,7 +162,7 @@ final class SessionStore {
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = .prettyPrinted
             let data = try encoder.encode(self.sessions)
-            try data.write(to: self.storageURL)
+            try data.write(to: self.storageURL, options: .atomic)
         } catch {
             print("Failed to save sessions: \(error)")
         }

@@ -450,10 +450,12 @@ public final class PeekabooAIService {
             return model
         }
 
-        guard let defaultVisionModel else {
+        guard let currentVisionModel = Self.resolveAvailableModels(configuration: self.configuration)
+            .first(where: \.supportsVision)
+        else {
             throw TachikomaError.unsupportedOperation("No configured vision-capable AI model is available")
         }
-        return defaultVisionModel
+        return currentVisionModel
     }
 
     private static func parseProviderEntry(_ entry: String, configuration: ConfigurationManager) -> LanguageModel? {

@@ -83,6 +83,18 @@ final class ScreenshotConversationContextStore {
         return try Data(contentsOf: imageURL)
     }
 
+    func hasImage(for sessionID: UUID) throws -> Bool {
+        guard let context = try self.context(for: sessionID) else {
+            return false
+        }
+        let imageURL = self.imagesDirectory.appendingPathComponent(
+            context.imageFileName,
+            isDirectory: false)
+        var isDirectory: ObjCBool = false
+        return self.fileManager.fileExists(atPath: imageURL.path, isDirectory: &isDirectory) &&
+            !isDirectory.boolValue
+    }
+
     func removeContext(for sessionID: UUID) throws {
         let context = try self.context(for: sessionID)
         if let context {

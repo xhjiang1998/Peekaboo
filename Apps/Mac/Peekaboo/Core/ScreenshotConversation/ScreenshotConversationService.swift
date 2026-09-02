@@ -123,9 +123,9 @@ final class ScreenshotConversationService {
 
         do {
             if try self.contextStore.context(for: id) != nil {
-                return try self.contextStore.imageData(for: id) == nil
-                    ? .screenshotContextMissing
-                    : .screenshotAvailable
+                return try self.contextStore.hasImage(for: id)
+                    ? .screenshotAvailable
+                    : .screenshotContextMissing
             }
         } catch {
             return session.title == "截图分析" ? .screenshotContextMissing : .ordinary
@@ -271,6 +271,10 @@ final class ScreenshotConversationService {
     }
 
     private func cleanupStaleContexts() {
+        guard self.sessionStore.loadState != .failed else {
+            self.logger.error("Skipped screenshot context cleanup because session persistence could not be loaded")
+            return
+        }
         let validSessionIDs = Set(self.sessionStore.sessions.compactMap { UUID(uuidString: $0.id) })
         do {
             let removedSessionIDs = try self.contextStore.cleanupContexts(keeping: validSessionIDs)

@@ -56,8 +56,7 @@ struct SessionChatView: View {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         if self.isScreenshotConversation {
                             ScreenshotPreviewCard(
-                                imageData: try? self.screenshotConversationService.imageData(
-                                    for: self.session.id))
+                                sessionID: self.session.id)
                         }
 
                         ForEach(self.session.messages) { message in
@@ -223,7 +222,7 @@ struct SessionChatView: View {
 
     private func submitInput() {
         let trimmedInput = self.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedInput.isEmpty else { return }
+        guard !trimmedInput.isEmpty, self.canSubmit else { return }
 
         // Clear input immediately
         self.inputText = ""
@@ -283,7 +282,9 @@ struct SessionChatView: View {
 }
 
 private struct ScreenshotPreviewCard: View {
-    let imageData: Data?
+    @Environment(ScreenshotConversationService.self) private var screenshotConversationService
+    let sessionID: String
+    @State private var imageData: Data?
 
     var body: some View {
         Group {
@@ -309,6 +310,9 @@ private struct ScreenshotPreviewCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: self.sessionID) {
+            self.imageData = try? self.screenshotConversationService.imageData(for: self.sessionID)
+        }
     }
 }
 
