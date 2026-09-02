@@ -120,6 +120,34 @@ struct ScreenshotConversationServiceTests {
     }
 
     @Test
+    func `Starting service preserves screenshot contexts when session persistence is corrupt`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-screenshot-service-corrupt-session-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let storageURL = root.appendingPathComponent("sessions.json")
+        try Data("not valid json".utf8).write(to: storageURL)
+        let sessionStore = SessionStore(storageURL: storageURL)
+        let contextStore = ScreenshotConversationContextStore(
+            rootDirectory: root.appendingPathComponent("contexts", isDirectory: true))
+        let recoverableSessionID = UUID()
+        _ = try contextStore.save(imageData: Data([4, 2]), for: recoverableSessionID)
+
+        _ = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            modelResolver: { nil },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+            })
+
+        #expect(sessionStore.loadState == .failed)
+        #expect(try contextStore.context(for: recoverableSessionID) != nil)
+        #expect(try contextStore.imageData(for: recoverableSessionID) == Data([4, 2]))
+    }
+
+    @Test
     func `Screenshot session with missing context never becomes an ordinary agent session`() throws {
         let fixture = self.makeFixture { _, _, _ in
             ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")

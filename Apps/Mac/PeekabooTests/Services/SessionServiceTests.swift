@@ -110,6 +110,20 @@ struct SessionStoreTests {
 @MainActor
 struct SessionStorePersistenceTests {
     @Test
+    func `Corrupt persistence is reported instead of looking like an empty store`() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storageURL = directory.appendingPathComponent("test_sessions.json")
+        try Data("not valid json".utf8).write(to: storageURL)
+
+        let store = SessionStore(storageURL: storageURL)
+
+        #expect(store.sessions.isEmpty)
+        #expect(store.loadState == .failed)
+    }
+
+    @Test
     func `Sessions persist across store instances`() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

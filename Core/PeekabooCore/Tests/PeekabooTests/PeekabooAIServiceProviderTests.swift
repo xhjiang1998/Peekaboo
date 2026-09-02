@@ -8,6 +8,37 @@ import Testing
 struct PeekabooAIServiceProviderTests {
     @Test
     @MainActor
+    func `Existing service resolves the current vision provider for every request`() async throws {
+        try await self.withIsolatedEnvironment(
+            [:],
+            configurationJSON: """
+            {
+              "aiProviders": { "providers": "openai/gpt-5.5" }
+            }
+            """) {
+                var capturedModels: [LanguageModel] = []
+                let service = PeekabooAIService(textGenerator: { model, _, _ in
+                    capturedModels.append(model)
+                    return GenerateTextResult(text: "ok")
+                })
+                let turns = [PeekabooAIService.ConversationTurn(role: .user, text: "analyze")]
+
+                _ = try await service.analyzeImageConversation(
+                    imageData: Data([1]),
+                    turns: turns)
+                try ConfigurationManager.shared.updateConfiguration { configuration in
+                    configuration.aiProviders?.providers = "ollama/llava:latest"
+                }
+                _ = try await service.analyzeImageConversation(
+                    imageData: Data([1]),
+                    turns: turns)
+
+                #expect(capturedModels.map(\.modelId) == ["gpt-5.5", "llava:latest"])
+            }
+    }
+
+    @Test
+    @MainActor
     func `Resolves custom provider entries from config`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("peekaboo-config-\(UUID().uuidString)", isDirectory: true)
