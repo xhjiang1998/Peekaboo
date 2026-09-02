@@ -38,6 +38,14 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Restore Swift build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            Apps/Mac/.build
+            Core/PeekabooCore/.build
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode26-spm-${{ hashFiles('**/Package.resolved') }}
+
       - name: Run screenshot AI conversation tests
         working-directory: Core/PeekabooCore
         env:

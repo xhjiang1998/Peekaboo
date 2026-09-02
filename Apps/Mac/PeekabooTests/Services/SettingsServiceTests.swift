@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import PeekabooCore
+import Tachikoma
 import Testing
 @testable import Peekaboo
 
@@ -84,6 +85,59 @@ struct PeekabooSettingsTests {
             for model in models {
                 settings.selectedModel = model
                 #expect(settings.selectedModel == model)
+            }
+        }
+    }
+
+    @Test
+    func `Vision model persists provider-qualified selection and resolves it`() throws {
+        try withIsolatedSettingsEnvironment { configDir, credentialCoordinator in
+            let settings = PeekabooSettings(credentialCoordinator: credentialCoordinator)
+            settings.useCustomVisionModel = true
+            settings.customVisionProvider = "openai"
+            settings.customVisionModel = "gpt-5.5"
+
+            #expect(settings.providerQualifiedVisionModel == "openai/gpt-5.5")
+            #expect(
+                try settings.resolvedVisionModel(using: PeekabooAIService()) ==
+                    LanguageModel.openai(.gpt55))
+
+            let reloadedFixture = CredentialCoordinatorFixture(
+                directory: configDir.appendingPathComponent("vision-credential-fixture"))
+            let reloaded = PeekabooSettings(credentialCoordinator: reloadedFixture.coordinator())
+            #expect(reloaded.customVisionProvider == "openai")
+            #expect(reloaded.customVisionModel == "gpt-5.5")
+            #expect(reloaded.providerQualifiedVisionModel == "openai/gpt-5.5")
+        }
+    }
+
+    @Test
+    func `Legacy model-only vision preference infers its provider`() throws {
+        try withIsolatedSettingsEnvironment { _, credentialCoordinator in
+            UserDefaults.standard.set(true, forKey: "peekaboo.useCustomVisionModel")
+            UserDefaults.standard.set("gpt-5.5", forKey: "peekaboo.customVisionModel")
+
+            let settings = PeekabooSettings(credentialCoordinator: credentialCoordinator)
+
+            #expect(settings.customVisionProvider == "openai")
+            #expect(settings.customVisionModel == "gpt-5.5")
+            #expect(settings.providerQualifiedVisionModel == "openai/gpt-5.5")
+        }
+    }
+
+    @Test
+    func `Non-vision override is rejected before a request is sent`() throws {
+        try withIsolatedSettingsEnvironment { _, credentialCoordinator in
+            let settings = PeekabooSettings(credentialCoordinator: credentialCoordinator)
+            settings.useCustomVisionModel = true
+            settings.customVisionProvider = "ollama"
+            settings.customVisionModel = "llama3.3:latest"
+
+            #expect(
+                throws: PeekabooSettings.VisionModelSelectionError.unsupportedModel(
+                    "ollama/llama3.3:latest"))
+            {
+                _ = try settings.resolvedVisionModel(using: PeekabooAIService())
             }
         }
     }
