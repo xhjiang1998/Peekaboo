@@ -98,9 +98,8 @@ struct PeekabooSettingsTests {
             settings.customVisionModel = "gpt-5.5"
 
             #expect(settings.providerQualifiedVisionModel == "openai/gpt-5.5")
-            #expect(
-                try settings.resolvedVisionModel(using: PeekabooAIService()) ==
-                    LanguageModel.openai(.gpt55))
+            let resolvedModel = try settings.resolvedVisionModel(using: PeekabooAIService())
+            #expect(resolvedModel == LanguageModel.openai(.gpt55))
 
             let reloadedFixture = CredentialCoordinatorFixture(
                 directory: configDir.appendingPathComponent("vision-credential-fixture"))

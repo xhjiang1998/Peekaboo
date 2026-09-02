@@ -39,13 +39,13 @@ jobs:
           swift --version
 
       - name: Restore Swift build cache
-        uses: actions/cache@v4
+        id: swift-build-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             Apps/Mac/.build
             Core/PeekabooCore/.build
           key: ${{ runner.os }}-${{ runner.arch }}-xcode26-spm-${{ hashFiles('**/Package.resolved') }}
-          save-always: true
 
       - name: Run screenshot AI conversation tests
         working-directory: Core/PeekabooCore
@@ -89,3 +89,12 @@ jobs:
             ${{ runner.temp }}/Peekaboo.app.zip.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Save Swift build cache
+        if: always() && steps.swift-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            Apps/Mac/.build
+            Core/PeekabooCore/.build
+          key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
