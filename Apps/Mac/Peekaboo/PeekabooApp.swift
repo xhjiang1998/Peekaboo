@@ -119,6 +119,7 @@ struct PeekabooApp: App {
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .startNewSession)) { _ in
+                    guard self.settings.agentModeEnabled else { return }
                     _ = self.sessionStore.createSession(title: "New Session")
                 }
                 .onAppear {
@@ -279,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sessionStore: context.sessionStore,
                 permissions: context.permissions,
                 settings: context.settings,
+                screenshotConversationService: context.screenshotConversationService,
                 automationTargetTracker: self.automationTargetTracker,
                 updater: self.updaterController)
         }

@@ -64,6 +64,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let sessionStore: SessionStore
     private let permissions: Permissions
     private let settings: PeekabooSettings
+    private let screenshotConversationService: ScreenshotConversationService
     private let updater: any UpdaterProviding
     private let automationTargetTracker: AutomationTargetTracker
     private var latestGhostIcon: NSImage?
@@ -82,6 +83,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         sessionStore: SessionStore,
         permissions: Permissions,
         settings: PeekabooSettings,
+        screenshotConversationService: ScreenshotConversationService,
         automationTargetTracker: AutomationTargetTracker = AutomationTargetTracker(),
         updater: any UpdaterProviding)
     {
@@ -89,6 +91,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         self.sessionStore = sessionStore
         self.permissions = permissions
         self.settings = settings
+        self.screenshotConversationService = screenshotConversationService
         self.automationTargetTracker = automationTargetTracker
         self.updater = updater
 
@@ -517,8 +520,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         window.identifier = NSUserInterfaceItemIdentifier(AgentSessionUI.detailWindowIdentifier(sessionID: session.id))
         window.center()
         let rootView = SessionMainWindow()
+            .environment(self.settings)
             .environment(self.sessionStore)
             .environment(self.agent)
+            .environment(self.screenshotConversationService)
 
         window.contentView = NSHostingView(rootView: rootView)
 

@@ -54,6 +54,7 @@ struct SessionDetailContainer: View {
     let settings = PeekabooSettings()
     let sessionStore = SessionStore()
     SessionMainWindow()
+        .environment(settings)
         .environment(sessionStore)
         .environment(PeekabooAgent(settings: settings, sessionStore: sessionStore))
         .environment(ScreenshotConversationService(

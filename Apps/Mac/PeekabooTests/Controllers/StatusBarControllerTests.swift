@@ -41,11 +41,18 @@ struct StatusBarControllerTests {
         let agent = PeekabooAgent(
             settings: settings,
             sessionStore: sessionStore)
+        let screenshotConversationService = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: ScreenshotConversationContextStore(
+                rootDirectory: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("StatusBarControllerScreenshotTests-\(UUID().uuidString)")),
+            settings: settings)
         return StatusBarController(
             agent: agent,
             sessionStore: sessionStore,
             permissions: permissions,
             settings: settings,
+            screenshotConversationService: screenshotConversationService,
             updater: updater)
     }
 

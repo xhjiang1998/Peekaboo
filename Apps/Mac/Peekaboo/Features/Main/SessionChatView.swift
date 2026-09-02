@@ -6,6 +6,7 @@ import SwiftUI
 
 struct SessionChatView: View {
     @Environment(PeekabooAgent.self) private var agent
+    @Environment(PeekabooSettings.self) private var settings
     @Environment(SessionStore.self) private var sessionStore
     @Environment(ScreenshotConversationService.self) private var screenshotConversationService
 
@@ -18,21 +19,26 @@ struct SessionChatView: View {
         self.session.id == self.sessionStore.currentSession?.id
     }
 
+    private var screenshotRoute: ScreenshotConversationRoute {
+        self.screenshotConversationService.route(for: self.session.id)
+    }
+
     private var isScreenshotConversation: Bool {
-        self.screenshotConversationService.isScreenshotSession(self.session.id)
+        self.screenshotRoute != .ordinary
     }
 
     private var screenshotStatus: ScreenshotConversationStatus {
         self.screenshotConversationService.status(for: self.session.id)
     }
 
-    private var isScreenshotAnalyzing: Bool {
-        self.isScreenshotConversation && self.screenshotStatus == .analyzing
+    private var isScreenshotBusy: Bool {
+        self.isScreenshotConversation &&
+            (self.screenshotStatus == .analyzing || self.screenshotStatus == .cancelling)
     }
 
     private var isActive: Bool {
         guard self.isCurrentSession else { return false }
-        return self.isScreenshotConversation ? self.isScreenshotAnalyzing : self.agent.isProcessing
+        return self.isScreenshotConversation ? self.isScreenshotBusy : self.agent.isProcessing
     }
 
     var body: some View {
@@ -66,11 +72,11 @@ struct SessionChatView: View {
                         }
 
                         // Show progress indicator for active session
-                        if self.isCurrentSession, self.isScreenshotAnalyzing {
+                        if self.isCurrentSession, self.isScreenshotBusy {
                             HStack(spacing: 10) {
                                 ProgressView()
                                     .controlSize(.small)
-                                Text("正在分析截图…")
+                                Text(self.screenshotStatus == .cancelling ? "正在停止分析…" : "正在分析截图…")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             }
@@ -106,8 +112,13 @@ struct SessionChatView: View {
                 Divider()
 
                 // Connection error banner
-                if self.isScreenshotConversation,
-                   case let .failed(message) = self.screenshotStatus
+                if self.screenshotRoute == .screenshotContextMissing {
+                    ScreenshotAnalysisErrorBanner(
+                        message: "原截图已丢失，请重新截图",
+                        retry: nil)
+                    Divider()
+                } else if self.isScreenshotConversation,
+                          case let .failed(message) = self.screenshotStatus
                 {
                     ScreenshotAnalysisErrorBanner(
                         message: message,
@@ -142,7 +153,7 @@ struct SessionChatView: View {
                     self.submitInput()
                 }
 
-            if self.isScreenshotAnalyzing {
+            if self.screenshotStatus == .analyzing {
                 Button(action: {
                     self.screenshotConversationService.cancel(sessionID: self.session.id)
                 }, label: {
@@ -152,7 +163,10 @@ struct SessionChatView: View {
                 })
                 .buttonStyle(.plain)
                 .help("停止分析")
-            } else if self.agent.isProcessing, self.isCurrentSession {
+            } else if !self.isScreenshotConversation,
+                      self.agent.isProcessing,
+                      self.isCurrentSession
+            {
                 // Show stop button during execution
                 Button(action: {
                     self.agent.cancelCurrentTask()
@@ -171,20 +185,37 @@ struct SessionChatView: View {
                     .foregroundColor(self.inputText.isEmpty ? .secondary : .accentColor)
             })
             .buttonStyle(.plain)
-            .disabled(self.inputText.isEmpty || self.isScreenshotAnalyzing)
+            .disabled(self.inputText.isEmpty || !self.canSubmit)
         }
         .padding(12)
     }
 
     private var placeholderText: String {
-        if self.isScreenshotAnalyzing {
+        if self.screenshotStatus == .cancelling {
+            "正在停止分析…"
+        } else if self.isScreenshotBusy {
             "正在分析截图…"
+        } else if self.screenshotRoute == .screenshotContextMissing {
+            "原截图已丢失，请重新截图"
         } else if self.isScreenshotConversation {
             "继续追问这张截图…"
+        } else if !self.settings.agentModeEnabled {
+            "请在设置中启用 Agent，或使用 ⌥⌘A 截图提问"
         } else if self.agent.isProcessing, self.isCurrentSession {
             "Ask a follow-up question..."
         } else {
             "Ask Peekaboo..."
+        }
+    }
+
+    private var canSubmit: Bool {
+        switch self.screenshotRoute {
+        case .screenshotAvailable:
+            !self.isScreenshotBusy
+        case .screenshotContextMissing:
+            false
+        case .ordinary:
+            self.settings.agentModeEnabled
         }
     }
 
@@ -197,7 +228,8 @@ struct SessionChatView: View {
         // Clear input immediately
         self.inputText = ""
 
-        if self.isScreenshotConversation {
+        switch self.screenshotRoute {
+        case .screenshotAvailable:
             Task {
                 do {
                     try await self.screenshotConversationService.sendFollowUp(
@@ -208,6 +240,10 @@ struct SessionChatView: View {
                 }
             }
             return
+        case .screenshotContextMissing:
+            return
+        case .ordinary:
+            guard self.settings.agentModeEnabled else { return }
         }
 
         if self.agent.isProcessing, self.isCurrentSession {
@@ -278,7 +314,7 @@ private struct ScreenshotPreviewCard: View {
 
 private struct ScreenshotAnalysisErrorBanner: View {
     let message: String
-    let retry: () -> Void
+    let retry: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -288,8 +324,10 @@ private struct ScreenshotAnalysisErrorBanner: View {
                 .font(.caption)
                 .foregroundStyle(.red)
             Spacer()
-            Button("重试", action: self.retry)
-                .buttonStyle(.link)
+            if let retry {
+                Button("重试", action: retry)
+                    .buttonStyle(.link)
+            }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)

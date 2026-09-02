@@ -13,8 +13,15 @@ struct ScreenshotConversationAnalysis: Equatable, Sendable {
 enum ScreenshotConversationStatus: Equatable, Sendable {
     case idle
     case analyzing
+    case cancelling
     case ready
     case failed(String)
+}
+
+enum ScreenshotConversationRoute: Equatable, Sendable {
+    case ordinary
+    case screenshotAvailable
+    case screenshotContextMissing
 }
 
 enum ScreenshotConversationServiceError: Error, Equatable, LocalizedError {
@@ -60,6 +67,7 @@ final class ScreenshotConversationService {
     private let logger = Logger(subsystem: "boo.peekaboo.app", category: "ScreenshotConversation")
     private var statuses: [String: ScreenshotConversationStatus] = [:]
     private var activeRequestIDs: [String: UUID] = [:]
+    private var activeRequestTasks: [String: Task<ScreenshotConversationAnalysis, Error>] = [:]
 
     init(
         sessionStore: SessionStore,
@@ -103,8 +111,26 @@ final class ScreenshotConversationService {
     }
 
     func isScreenshotSession(_ sessionID: String) -> Bool {
-        guard let id = UUID(uuidString: sessionID) else { return false }
-        return (try? self.contextStore.context(for: id)) != nil
+        self.route(for: sessionID) != .ordinary
+    }
+
+    func route(for sessionID: String) -> ScreenshotConversationRoute {
+        guard let session = self.sessionStore.session(id: sessionID),
+              let id = UUID(uuidString: sessionID)
+        else {
+            return .ordinary
+        }
+
+        do {
+            if try self.contextStore.context(for: id) != nil {
+                return try self.contextStore.imageData(for: id) == nil
+                    ? .screenshotContextMissing
+                    : .screenshotAvailable
+            }
+        } catch {
+            return session.title == "截图分析" ? .screenshotContextMissing : .ordinary
+        }
+        return session.title == "截图分析" ? .screenshotContextMissing : .ordinary
     }
 
     func imageData(for sessionID: String) throws -> Data? {
@@ -137,7 +163,7 @@ final class ScreenshotConversationService {
     }
 
     func analyze(sessionID: String) async throws {
-        guard self.activeRequestIDs[sessionID] == nil else {
+        guard self.activeRequestTasks[sessionID] == nil else {
             throw ScreenshotConversationServiceError.requestAlreadyInProgress
         }
         guard let session = self.sessionStore.session(id: sessionID) else {
@@ -150,36 +176,51 @@ final class ScreenshotConversationService {
         let requestID = UUID()
         self.activeRequestIDs[sessionID] = requestID
         self.statuses[sessionID] = .analyzing
-
-        do {
-            let result = try await self.analyzer(
+        let requestTask = Task {
+            try await self.analyzer(
                 imageData,
                 Self.turns(from: session.messages),
                 try self.modelResolver())
-            guard self.activeRequestIDs[sessionID] == requestID else {
-                return
-            }
+        }
+        self.activeRequestTasks[sessionID] = requestTask
 
-            self.activeRequestIDs[sessionID] = nil
-            guard let currentSession = self.sessionStore.session(id: sessionID) else {
-                self.statuses[sessionID] = .idle
-                return
-            }
-            self.sessionStore.addMessage(
-                ConversationMessage(role: .assistant, content: result.text),
-                to: currentSession)
-            self.sessionStore.updateModelName(
-                "\(result.provider)/\(result.model)",
-                for: currentSession)
-            self.statuses[sessionID] = .ready
+        let result: ScreenshotConversationAnalysis
+        do {
+            result = try await requestTask.value
         } catch {
             guard self.activeRequestIDs[sessionID] == requestID else {
                 return
             }
             self.activeRequestIDs[sessionID] = nil
+            self.activeRequestTasks[sessionID] = nil
+            if requestTask.isCancelled || error is CancellationError {
+                self.statuses[sessionID] = .idle
+                throw CancellationError()
+            }
             self.statuses[sessionID] = .failed("AI 分析失败，请重试")
             throw error
         }
+
+        guard self.activeRequestIDs[sessionID] == requestID else {
+            return
+        }
+        self.activeRequestIDs[sessionID] = nil
+        self.activeRequestTasks[sessionID] = nil
+        if requestTask.isCancelled {
+            self.statuses[sessionID] = .idle
+            throw CancellationError()
+        }
+        guard let currentSession = self.sessionStore.session(id: sessionID) else {
+            self.statuses[sessionID] = .idle
+            return
+        }
+        self.sessionStore.addMessage(
+            ConversationMessage(role: .assistant, content: result.text),
+            to: currentSession)
+        self.sessionStore.updateModelName(
+            "\(result.provider)/\(result.model)",
+            for: currentSession)
+        self.statuses[sessionID] = .ready
     }
 
     func sendFollowUp(_ text: String, sessionID: String) async throws {
@@ -187,13 +228,13 @@ final class ScreenshotConversationService {
         guard !normalizedText.isEmpty else {
             throw ScreenshotConversationServiceError.emptyMessage
         }
-        guard self.activeRequestIDs[sessionID] == nil else {
+        guard self.activeRequestTasks[sessionID] == nil else {
             throw ScreenshotConversationServiceError.requestAlreadyInProgress
         }
         guard let session = self.sessionStore.session(id: sessionID) else {
             throw ScreenshotConversationServiceError.sessionNotFound
         }
-        guard self.isScreenshotSession(sessionID) else {
+        guard self.route(for: sessionID) == .screenshotAvailable else {
             throw ScreenshotConversationServiceError.imageContextMissing
         }
 
@@ -204,8 +245,12 @@ final class ScreenshotConversationService {
     }
 
     func cancel(sessionID: String) {
-        self.activeRequestIDs[sessionID] = nil
-        self.statuses[sessionID] = .idle
+        guard let task = self.activeRequestTasks[sessionID] else {
+            self.statuses[sessionID] = .idle
+            return
+        }
+        self.statuses[sessionID] = .cancelling
+        task.cancel()
     }
 
     func deleteSession(sessionID: String) throws {
@@ -213,7 +258,9 @@ final class ScreenshotConversationService {
             throw ScreenshotConversationServiceError.invalidSessionID
         }
 
-        self.cancel(sessionID: sessionID)
+        self.activeRequestTasks[sessionID]?.cancel()
+        self.activeRequestTasks[sessionID] = nil
+        self.activeRequestIDs[sessionID] = nil
         try self.contextStore.removeContext(for: id)
         self.statuses.removeValue(forKey: sessionID)
         self.sessionStore.sessions.removeAll { $0.id == sessionID }

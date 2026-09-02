@@ -65,6 +65,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
     private let cancelSelection: () -> Void
     private let reportFailure: (CaptureAndAskFailure) -> Void
     private var captureTask: Task<Void, Never>?
+    private var latestSessionID: String?
 
     init(
         permissionCheck: @escaping PermissionCheck,
@@ -132,8 +133,12 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         guard self.captureTask == nil else { return }
         self.captureTask = Task { [weak self] in
             guard let self else { return }
-            await self.performCapture()
+            let sessionID = await self.prepareCapture()
             self.captureTask = nil
+            guard let sessionID else { return }
+            Task { [weak self] in
+                await self?.performAnalysis(sessionID: sessionID)
+            }
         }
     }
 
@@ -145,9 +150,15 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
     }
 
     func performCapture() async {
+        guard let sessionID = await self.prepareCapture() else { return }
+        await self.performAnalysis(sessionID: sessionID)
+    }
+
+    private func prepareCapture() async -> String? {
+        self.latestSessionID = nil
         guard await self.permissionCheck() else {
             self.fail(.screenRecordingDenied)
-            return
+            return nil
         }
 
         self.state = .selecting
@@ -155,17 +166,17 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         do {
             guard let selectedArea = try await self.selectArea() else {
                 self.state = .idle
-                return
+                return nil
             }
             selection = selectedArea
         } catch {
             self.fail(.selectionFailed)
-            return
+            return nil
         }
 
         guard !Task.isCancelled else {
             self.state = .idle
-            return
+            return nil
         }
 
         self.state = .capturing
@@ -174,7 +185,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             imageData = try await self.captureArea(self.resolveCaptureRect(selection.rect))
         } catch {
             self.fail(.captureFailed)
-            return
+            return nil
         }
 
         let sessionID: String
@@ -182,22 +193,36 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             sessionID = try self.createConversation(imageData)
         } catch {
             self.fail(.conversationFailed)
-            return
+            return nil
         }
 
+        self.latestSessionID = sessionID
         self.state = .presenting(sessionID: sessionID)
         self.presentWindow(sessionID)
         self.state = .analyzing(sessionID: sessionID)
+        return sessionID
+    }
 
+    private func performAnalysis(sessionID: String) async {
         do {
             try await self.analyze(sessionID)
             guard !Task.isCancelled else {
-                self.state = .idle
+                if self.latestSessionID == sessionID {
+                    self.state = .idle
+                }
                 return
             }
-            self.state = .ready(sessionID: sessionID)
+            if self.latestSessionID == sessionID {
+                self.state = .ready(sessionID: sessionID)
+            }
+        } catch is CancellationError {
+            if self.latestSessionID == sessionID {
+                self.state = .idle
+            }
         } catch {
-            self.fail(.analysisFailed, showsAlert: false)
+            if self.latestSessionID == sessionID {
+                self.fail(.analysisFailed, showsAlert: false)
+            }
         }
     }
 

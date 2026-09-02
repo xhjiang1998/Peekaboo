@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct SessionSidebar: View {
     @Environment(SessionStore.self) private var sessionStore
     @Environment(PeekabooAgent.self) private var agent
+    @Environment(PeekabooSettings.self) private var settings
     @Environment(ScreenshotConversationService.self) private var screenshotConversationService
 
     @Binding var selectedSessionId: String?
@@ -78,6 +79,7 @@ struct SessionSidebar: View {
                 }
                 .keyboardShortcut("n", modifiers: .command)
                 .help("New Session (⌘N)")
+                .disabled(!self.settings.agentModeEnabled)
             }
         }
         .onDeleteCommand {
@@ -92,6 +94,7 @@ struct SessionSidebar: View {
     }
 
     private func createNewSession() {
+        guard self.settings.agentModeEnabled else { return }
         let newSession = self.sessionStore.createSession(title: "New Session")
         self.selectedSessionId = newSession.id
     }

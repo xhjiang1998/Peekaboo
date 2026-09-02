@@ -42,6 +42,21 @@ struct CaptureSelection: Equatable, Sendable {
         self.rect = normalized
         self.displayID = displayID
     }
+
+    static func clamped(
+        start: CGPoint,
+        end: CGPoint,
+        within bounds: CGRect,
+        displayID: CGDirectDisplayID?) -> CaptureSelection?
+    {
+        let clampedStart = CGPoint(
+            x: min(max(start.x, bounds.minX), bounds.maxX),
+            y: min(max(start.y, bounds.minY), bounds.maxY))
+        let clampedEnd = CGPoint(
+            x: min(max(end.x, bounds.minX), bounds.maxX),
+            y: min(max(end.y, bounds.minY), bounds.maxY))
+        return CaptureSelection(start: clampedStart, end: clampedEnd, displayID: displayID)
+    }
 }
 
 @MainActor
@@ -184,16 +199,17 @@ private final class CaptureSelectionView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         guard self.startPoint != nil else { return }
-        self.currentPoint = self.convert(event.locationInWindow, from: nil)
+        self.currentPoint = self.clampedToBounds(self.convert(event.locationInWindow, from: nil))
         self.needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
         guard let startPoint = self.startPoint else { return }
-        let endPoint = self.convert(event.locationInWindow, from: nil)
-        guard let localSelection = CaptureSelection(
+        let endPoint = self.clampedToBounds(self.convert(event.locationInWindow, from: nil))
+        guard let localSelection = CaptureSelection.clamped(
             start: startPoint,
             end: endPoint,
+            within: self.bounds,
             displayID: self.displayID)
         else {
             self.startPoint = nil
@@ -237,5 +253,11 @@ private final class CaptureSelectionView: NSView {
             y: min(startPoint.y, currentPoint.y),
             width: abs(currentPoint.x - startPoint.x),
             height: abs(currentPoint.y - startPoint.y))
+    }
+
+    private func clampedToBounds(_ point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, self.bounds.minX), self.bounds.maxX),
+            y: min(max(point.y, self.bounds.minY), self.bounds.maxY))
     }
 }
