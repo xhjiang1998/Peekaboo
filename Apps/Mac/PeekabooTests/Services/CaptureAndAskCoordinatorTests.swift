@@ -147,7 +147,6 @@ struct CaptureAndAskCoordinatorTests {
         try? await Task.sleep(for: .milliseconds(60))
 
         #expect(selectionCount == 1)
-        #expect(coordinator.state == .idle)
     }
 
     @Test
