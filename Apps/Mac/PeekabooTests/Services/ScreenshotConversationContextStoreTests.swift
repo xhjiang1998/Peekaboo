@@ -81,6 +81,25 @@ struct ScreenshotConversationContextStoreTests {
         #expect(!FileManager.default.fileExists(atPath: orphan.path))
     }
 
+    @Test
+    func `Cleanup removes contexts whose sessions no longer exist`() throws {
+        let root = self.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let retainedSessionID = UUID()
+        let removedSessionID = UUID()
+        let store = ScreenshotConversationContextStore(rootDirectory: root)
+        _ = try store.save(imageData: Data([1]), for: retainedSessionID)
+        _ = try store.save(imageData: Data([2]), for: removedSessionID)
+
+        let removed = try store.cleanupContexts(keeping: [retainedSessionID])
+
+        #expect(removed == [removedSessionID])
+        #expect(try store.imageData(for: retainedSessionID) == Data([1]))
+        #expect(try store.context(for: removedSessionID) == nil)
+        #expect(try store.imageData(for: removedSessionID) == nil)
+    }
+
     private func makeTemporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("peekaboo-screenshot-context-tests", isDirectory: true)

@@ -78,6 +78,47 @@ struct ScreenshotConversationServiceTests {
         #expect(fixture.service.status(for: session.id) == .idle)
     }
 
+    @Test
+    func `Deleting a screenshot session removes its session context and image`() throws {
+        let fixture = self.makeFixture { _, _, _ in
+            ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+        }
+        defer { fixture.cleanup() }
+
+        let session = try fixture.service.createConversation(imageData: Data([7, 8, 9]))
+
+        try fixture.service.deleteSession(sessionID: session.id)
+
+        #expect(fixture.sessionStore.session(id: session.id) == nil)
+        #expect(fixture.sessionStore.currentSession == nil)
+        #expect(try fixture.contextStore.context(for: UUID(uuidString: session.id)!) == nil)
+        #expect(try fixture.contextStore.imageData(for: UUID(uuidString: session.id)!) == nil)
+    }
+
+    @Test
+    func `Starting service removes screenshot contexts without matching sessions`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-screenshot-service-reconcile-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        let contextStore = ScreenshotConversationContextStore(
+            rootDirectory: root.appendingPathComponent("contexts", isDirectory: true))
+        let staleSessionID = UUID()
+        _ = try contextStore.save(imageData: Data([4, 2]), for: staleSessionID)
+
+        _ = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            modelResolver: { nil },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+            })
+
+        #expect(try contextStore.context(for: staleSessionID) == nil)
+        #expect(try contextStore.imageData(for: staleSessionID) == nil)
+    }
+
     private func makeFixture(
         analyzer: @escaping ScreenshotConversationService.Analyzer) -> Fixture
     {
