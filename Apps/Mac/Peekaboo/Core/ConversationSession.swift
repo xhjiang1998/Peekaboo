@@ -43,14 +43,25 @@ final class SessionStore {
         return peekabooDirectory.appendingPathComponent("sessions.json", isDirectory: false)
     }
 
-    func createSession(title: String = "", modelName: String = "") -> ConversationSession {
-        let session = ConversationSession(title: title.isEmpty ? "New Session" : title, modelName: modelName)
+    func createSession(
+        id: String? = nil,
+        title: String = "",
+        modelName: String = "") -> ConversationSession
+    {
+        let session = ConversationSession(
+            id: id,
+            title: title.isEmpty ? "New Session" : title,
+            modelName: modelName)
         self.sessions.insert(session, at: 0)
         self.currentSession = session
         Task { @MainActor in
             self.saveSessions()
         }
         return session
+    }
+
+    func session(id: String) -> ConversationSession? {
+        self.sessions.first(where: { $0.id == id })
     }
 
     func addMessage(_ message: ConversationMessage, to session: ConversationSession) {
@@ -72,6 +83,14 @@ final class SessionStore {
     func updateTitle(_ title: String, for session: ConversationSession) {
         guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         self.sessions[index].title = title
+        Task { @MainActor in
+            self.saveSessions()
+        }
+    }
+
+    func updateModelName(_ modelName: String, for session: ConversationSession) {
+        guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
+        self.sessions[index].modelName = modelName
         Task { @MainActor in
             self.saveSessions()
         }
