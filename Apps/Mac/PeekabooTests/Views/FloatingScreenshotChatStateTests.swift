@@ -31,6 +31,12 @@ struct FloatingScreenshotChatStateTests {
         #expect(ScreenshotPreviewCard.collapsedHeight == 100)
         #expect(ScreenshotPreviewCard.expandedMaximumHeight == 280)
         #expect(FloatingScreenshotChatView.cardWidth == 460)
+        #expect(FloatingScreenshotChatView.conversationRegions == [
+            .header,
+            .scrollableConversation,
+            .status,
+            .composer,
+        ])
     }
 
     @Test

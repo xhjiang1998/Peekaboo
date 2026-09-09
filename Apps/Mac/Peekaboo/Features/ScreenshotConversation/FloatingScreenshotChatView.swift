@@ -3,7 +3,20 @@ import PeekabooCore
 import SwiftUI
 
 struct FloatingScreenshotChatView: View {
+    enum ConversationRegion: Hashable {
+        case header
+        case scrollableConversation
+        case status
+        case composer
+    }
+
     static let cardWidth: CGFloat = 460
+    static let conversationRegions: [ConversationRegion] = [
+        .header,
+        .scrollableConversation,
+        .status,
+        .composer,
+    ]
 
     @Environment(SessionStore.self) private var sessionStore
     @Environment(ScreenshotConversationService.self) private var screenshotConversationService
@@ -37,25 +50,30 @@ struct FloatingScreenshotChatView: View {
 
     private func conversationCard(session: ConversationSession) -> some View {
         VStack(spacing: 0) {
-            FloatingScreenshotChatHeader(
-                modelName: self.modelName(for: session),
-                isPreviewExpanded: self.state.isPreviewExpanded,
-                onClose: self.onClose,
-                onTogglePreview: self.state.togglePreview,
-                onHorizontalDrag: self.onHorizontalDrag)
-
-            Divider()
-
-            self.conversationContent(session: session)
-
-            Divider()
-
-            ScreenshotFollowUpComposer(
-                sessionID: session.id,
-                placeholder: self.placeholder(for: session.id),
-                canSubmit: self.canSubmit(sessionID: session.id),
-                isBusy: self.isBusy(sessionID: session.id))
-                .id(session.id)
+            ForEach(Self.conversationRegions, id: \.self) { region in
+                switch region {
+                case .header:
+                    FloatingScreenshotChatHeader(
+                        modelName: self.modelName(for: session),
+                        isPreviewExpanded: self.state.isPreviewExpanded,
+                        onClose: self.onClose,
+                        onTogglePreview: self.state.togglePreview,
+                        onHorizontalDrag: self.onHorizontalDrag)
+                    Divider()
+                case .scrollableConversation:
+                    self.conversationContent(session: session)
+                case .status:
+                    self.statusView(sessionID: session.id)
+                case .composer:
+                    Divider()
+                    ScreenshotFollowUpComposer(
+                        sessionID: session.id,
+                        placeholder: self.placeholder(for: session.id),
+                        canSubmit: self.canSubmit(sessionID: session.id),
+                        isBusy: self.isBusy(sessionID: session.id))
+                        .id(session.id)
+                }
+            }
         }
     }
 
@@ -72,8 +90,6 @@ struct FloatingScreenshotChatView: View {
                         DetailedMessageRow(message: message)
                             .id(message.id)
                     }
-
-                    self.statusView(sessionID: session.id)
                 }
                 .padding(12)
             }
@@ -110,7 +126,9 @@ struct FloatingScreenshotChatView: View {
         } else if self.isBusy(sessionID: sessionID) {
             ScreenshotConversationProgressView(isCancelling: status == .cancelling)
                 .id("screenshot-progress")
-                .padding(.top, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
         }
     }
 
