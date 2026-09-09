@@ -38,8 +38,11 @@ struct CaptureAndAskCoordinatorTests {
                 #expect(imageData == Data([1, 2, 3]))
                 return "screenshot-session"
             },
-            presentWindow: { sessionID in
-                events.append("present:\(sessionID)")
+            presentConversation: { context in
+                #expect(context.sessionID == "screenshot-session")
+                #expect(context.selectionRect == selection.rect)
+                #expect(context.displayID == selection.displayID)
+                events.append("present:\(context.sessionID)")
             },
             analyze: { sessionID in
                 events.append("analyze:\(sessionID)")
@@ -70,7 +73,7 @@ struct CaptureAndAskCoordinatorTests {
                 return Data()
             },
             createConversation: { _ in "unused" },
-            presentWindow: { _ in },
+            presentConversation: { _ in },
             analyze: { _ in })
 
         await coordinator.performCapture()
@@ -92,7 +95,7 @@ struct CaptureAndAskCoordinatorTests {
             resolveCaptureRect: { $0 },
             captureArea: { _ in Data() },
             createConversation: { _ in "unused" },
-            presentWindow: { _ in },
+            presentConversation: { _ in },
             analyze: { _ in },
             reportFailure: { reportedFailures.append($0) })
 
@@ -116,7 +119,7 @@ struct CaptureAndAskCoordinatorTests {
             resolveCaptureRect: { $0 },
             captureArea: { _ in Data([1, 2, 3]) },
             createConversation: { _ in "screenshot-session" },
-            presentWindow: { _ in },
+            presentConversation: { _ in },
             analyze: { _ in throw TestFailure.analysis },
             reportFailure: { reportedFailures.append($0) })
 
@@ -139,7 +142,7 @@ struct CaptureAndAskCoordinatorTests {
             resolveCaptureRect: { $0 },
             captureArea: { _ in Data() },
             createConversation: { _ in "unused" },
-            presentWindow: { _ in },
+            presentConversation: { _ in },
             analyze: { _ in })
 
         coordinator.startCapture()
@@ -165,7 +168,7 @@ struct CaptureAndAskCoordinatorTests {
             resolveCaptureRect: { $0 },
             captureArea: { _ in Data([1, 2, 3]) },
             createConversation: { _ in UUID().uuidString },
-            presentWindow: { _ in },
+            presentConversation: { _ in },
             analyze: { _ in
                 try? await Task.sleep(for: .milliseconds(120))
             })
@@ -178,7 +181,145 @@ struct CaptureAndAskCoordinatorTests {
         #expect(selectionCount == 2)
     }
 
+    @Test
+    func `Latest capture cancels prior analysis and ignores its late success`() async {
+        let selection = CaptureSelection(
+            start: CGPoint(x: 10, y: 20),
+            end: CGPoint(x: 210, y: 120),
+            displayID: 7)!
+        let analyses = ControllableAnalyses()
+        var sessionIDs = ["session-a", "session-b"]
+        var presentedContexts: [ScreenshotPresentationContext] = []
+        var cancelledSessionIDs: [String] = []
+        let coordinator = CaptureAndAskCoordinator(
+            permissionCheck: { true },
+            selectArea: { selection },
+            resolveCaptureRect: { $0 },
+            captureArea: { _ in Data([1, 2, 3]) },
+            createConversation: { _ in sessionIDs.removeFirst() },
+            presentConversation: { presentedContexts.append($0) },
+            analyze: { try await analyses.wait(for: $0) },
+            cancelConversation: { cancelledSessionIDs.append($0) })
+
+        coordinator.startCapture()
+        let firstAnalysisStarted = await self.waitUntil {
+            analyses.startedSessionIDs == ["session-a"]
+        }
+        #expect(firstAnalysisStarted)
+
+        coordinator.startCapture()
+        let secondAnalysisStarted = await self.waitUntil {
+            analyses.startedSessionIDs == ["session-a", "session-b"]
+        }
+        #expect(secondAnalysisStarted)
+        #expect(cancelledSessionIDs == ["session-a"])
+        #expect(presentedContexts == [
+            ScreenshotPresentationContext(
+                sessionID: "session-a",
+                selectionRect: selection.rect,
+                displayID: selection.displayID),
+            ScreenshotPresentationContext(
+                sessionID: "session-b",
+                selectionRect: selection.rect,
+                displayID: selection.displayID),
+        ])
+        #expect(coordinator.state == .analyzing(sessionID: "session-b"))
+
+        analyses.succeed("session-a")
+        let staleAnalysisFinished = await self.waitUntil {
+            analyses.finishedSessionIDs.contains("session-a")
+        }
+        #expect(staleAnalysisFinished)
+        #expect(coordinator.state == .analyzing(sessionID: "session-b"))
+
+        analyses.succeed("session-b")
+        let latestAnalysisFinished = await self.waitUntil {
+            coordinator.state == .ready(sessionID: "session-b")
+        }
+        #expect(latestAnalysisFinished)
+        #expect(cancelledSessionIDs == ["session-a"])
+    }
+
+    @Test
+    func `Late failure from cancelled analysis cannot replace latest ready state`() async {
+        let selection = CaptureSelection(
+            start: CGPoint(x: 10, y: 20),
+            end: CGPoint(x: 210, y: 120),
+            displayID: 7)!
+        let analyses = ControllableAnalyses()
+        var sessionIDs = ["session-a", "session-b"]
+        var reportedFailures: [CaptureAndAskFailure] = []
+        let coordinator = CaptureAndAskCoordinator(
+            permissionCheck: { true },
+            selectArea: { selection },
+            resolveCaptureRect: { $0 },
+            captureArea: { _ in Data([1, 2, 3]) },
+            createConversation: { _ in sessionIDs.removeFirst() },
+            presentConversation: { _ in },
+            analyze: { try await analyses.wait(for: $0) },
+            cancelConversation: { _ in },
+            reportFailure: { reportedFailures.append($0) })
+
+        coordinator.startCapture()
+        let firstAnalysisStarted = await self.waitUntil {
+            analyses.startedSessionIDs == ["session-a"]
+        }
+        #expect(firstAnalysisStarted)
+        coordinator.startCapture()
+        let secondAnalysisStarted = await self.waitUntil {
+            analyses.startedSessionIDs == ["session-a", "session-b"]
+        }
+        #expect(secondAnalysisStarted)
+
+        analyses.succeed("session-b")
+        let latestAnalysisFinished = await self.waitUntil {
+            coordinator.state == .ready(sessionID: "session-b")
+        }
+        #expect(latestAnalysisFinished)
+
+        analyses.fail("session-a")
+        let staleAnalysisFinished = await self.waitUntil {
+            analyses.finishedSessionIDs.contains("session-a")
+        }
+        #expect(staleAnalysisFinished)
+        #expect(coordinator.state == .ready(sessionID: "session-b"))
+        #expect(reportedFailures.isEmpty)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<1000 {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
     private enum TestFailure: Error {
         case analysis
+    }
+
+    @MainActor
+    private final class ControllableAnalyses {
+        private(set) var startedSessionIDs: [String] = []
+        private(set) var finishedSessionIDs: [String] = []
+        private var continuations: [String: CheckedContinuation<Void, any Error>] = [:]
+
+        func wait(for sessionID: String) async throws {
+            self.startedSessionIDs.append(sessionID)
+            defer { self.finishedSessionIDs.append(sessionID) }
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuations[sessionID] = continuation
+            }
+        }
+
+        func succeed(_ sessionID: String) {
+            self.continuations.removeValue(forKey: sessionID)?.resume()
+        }
+
+        func fail(_ sessionID: String) {
+            self.continuations.removeValue(forKey: sessionID)?.resume(throwing: TestFailure.analysis)
+        }
     }
 }

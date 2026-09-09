@@ -50,8 +50,9 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
     typealias CaptureRectResolver = (CGRect) -> CGRect
     typealias AreaCapture = (CGRect) async throws -> Data
     typealias ConversationCreator = (Data) throws -> String
-    typealias WindowPresenter = (String) -> Void
+    typealias ConversationPresenter = (ScreenshotPresentationContext) -> Void
     typealias ConversationAnalyzer = (String) async throws -> Void
+    typealias ConversationCanceller = (String) -> Void
 
     private(set) var state: CaptureAndAskState = .idle
 
@@ -60,11 +61,13 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
     private let resolveCaptureRect: CaptureRectResolver
     private let captureArea: AreaCapture
     private let createConversation: ConversationCreator
-    private let presentWindow: WindowPresenter
+    private let presentConversation: ConversationPresenter
     private let analyze: ConversationAnalyzer
+    private let cancelConversation: ConversationCanceller
     private let cancelSelection: () -> Void
     private let reportFailure: (CaptureAndAskFailure) -> Void
     private var captureTask: Task<Void, Never>?
+    private var analysisTask: Task<Void, Never>?
     private var latestSessionID: String?
 
     init(
@@ -73,8 +76,9 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         resolveCaptureRect: @escaping CaptureRectResolver,
         captureArea: @escaping AreaCapture,
         createConversation: @escaping ConversationCreator,
-        presentWindow: @escaping WindowPresenter,
+        presentConversation: @escaping ConversationPresenter,
         analyze: @escaping ConversationAnalyzer,
+        cancelConversation: @escaping ConversationCanceller = { _ in },
         cancelSelection: @escaping () -> Void = {},
         reportFailure: @escaping (CaptureAndAskFailure) -> Void = { _ in })
     {
@@ -83,17 +87,43 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         self.resolveCaptureRect = resolveCaptureRect
         self.captureArea = captureArea
         self.createConversation = createConversation
-        self.presentWindow = presentWindow
+        self.presentConversation = presentConversation
         self.analyze = analyze
+        self.cancelConversation = cancelConversation
         self.cancelSelection = cancelSelection
         self.reportFailure = reportFailure
+    }
+
+    convenience init(
+        permissionCheck: @escaping PermissionCheck,
+        selectArea: @escaping AreaSelector,
+        resolveCaptureRect: @escaping CaptureRectResolver,
+        captureArea: @escaping AreaCapture,
+        createConversation: @escaping ConversationCreator,
+        presentWindow: @escaping (String) -> Void,
+        analyze: @escaping ConversationAnalyzer,
+        cancelConversation: @escaping ConversationCanceller = { _ in },
+        cancelSelection: @escaping () -> Void = {},
+        reportFailure: @escaping (CaptureAndAskFailure) -> Void = { _ in })
+    {
+        self.init(
+            permissionCheck: permissionCheck,
+            selectArea: selectArea,
+            resolveCaptureRect: resolveCaptureRect,
+            captureArea: captureArea,
+            createConversation: createConversation,
+            presentConversation: { presentWindow($0.sessionID) },
+            analyze: analyze,
+            cancelConversation: cancelConversation,
+            cancelSelection: cancelSelection,
+            reportFailure: reportFailure)
     }
 
     convenience init(
         services: PeekabooServices,
         selector: any CaptureAreaSelecting,
         conversationService: ScreenshotConversationService,
-        windowPresenter: any MainWindowPresenting)
+        conversationPresenter: any ScreenshotConversationPresenting)
     {
         self.init(
             permissionCheck: {
@@ -115,11 +145,14 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             createConversation: { imageData in
                 try conversationService.createConversation(imageData: imageData).id
             },
-            presentWindow: { sessionID in
-                windowPresenter.forceShow(sessionID: sessionID)
+            presentConversation: { context in
+                conversationPresenter.present(context)
             },
             analyze: { sessionID in
                 try await conversationService.analyze(sessionID: sessionID)
+            },
+            cancelConversation: { sessionID in
+                conversationService.cancel(sessionID: sessionID)
             },
             cancelSelection: {
                 selector.cancel()
@@ -136,9 +169,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             let sessionID = await self.prepareCapture()
             self.captureTask = nil
             guard let sessionID else { return }
-            Task { [weak self] in
-                await self?.performAnalysis(sessionID: sessionID)
-            }
+            self.beginAnalysis(sessionID: sessionID)
         }
     }
 
@@ -151,11 +182,10 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
 
     func performCapture() async {
         guard let sessionID = await self.prepareCapture() else { return }
-        await self.performAnalysis(sessionID: sessionID)
+        await self.beginAnalysis(sessionID: sessionID).value
     }
 
     private func prepareCapture() async -> String? {
-        self.latestSessionID = nil
         guard await self.permissionCheck() else {
             self.fail(.screenRecordingDenied)
             return nil
@@ -196,25 +226,38 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             return nil
         }
 
+        if let previousSessionID = self.latestSessionID, self.analysisTask != nil {
+            self.cancelConversation(previousSessionID)
+            self.analysisTask?.cancel()
+        }
         self.latestSessionID = sessionID
         self.state = .presenting(sessionID: sessionID)
-        self.presentWindow(sessionID)
+        self.presentConversation(ScreenshotPresentationContext(
+            sessionID: sessionID,
+            selectionRect: selection.rect,
+            displayID: selection.displayID))
         self.state = .analyzing(sessionID: sessionID)
         return sessionID
+    }
+
+    @discardableResult
+    private func beginAnalysis(sessionID: String) -> Task<Void, Never> {
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performAnalysis(sessionID: sessionID)
+            if self.latestSessionID == sessionID {
+                self.analysisTask = nil
+            }
+        }
+        self.analysisTask = task
+        return task
     }
 
     private func performAnalysis(sessionID: String) async {
         do {
             try await self.analyze(sessionID)
-            guard !Task.isCancelled else {
-                if self.latestSessionID == sessionID {
-                    self.state = .idle
-                }
-                return
-            }
-            if self.latestSessionID == sessionID {
-                self.state = .ready(sessionID: sessionID)
-            }
+            guard !Task.isCancelled, self.latestSessionID == sessionID else { return }
+            self.state = .ready(sessionID: sessionID)
         } catch is CancellationError {
             if self.latestSessionID == sessionID {
                 self.state = .idle
