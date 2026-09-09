@@ -451,9 +451,15 @@ struct ScreenshotConversationServiceTests {
     }
 
     @Test
-    func `Cancelling analysis cancels its task before allowing another request`() async throws {
+    func `Cancelling analysis invalidates its result after cancelling the task`() async throws {
+        var analyzerObservedCancellation = false
         let fixture = self.makeFixture { _, _, _ in
-            try await Task.sleep(for: .seconds(5))
+            do {
+                try await Task.sleep(for: .seconds(5))
+            } catch is CancellationError {
+                analyzerObservedCancellation = true
+                throw CancellationError()
+            }
             return ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "late")
         }
         defer { fixture.cleanup() }
@@ -466,9 +472,9 @@ struct ScreenshotConversationServiceTests {
         fixture.service.cancel(sessionID: session.id)
 
         #expect(fixture.service.status(for: session.id) == .cancelling)
-        await #expect(throws: CancellationError.self) {
-            try await analysis.value
-        }
+        try await analysis.value
+        #expect(analyzerObservedCancellation)
+        #expect(fixture.sessionStore.session(id: session.id)?.messages.map(\.role) == [.user])
         #expect(fixture.service.status(for: session.id) == .idle)
     }
 
