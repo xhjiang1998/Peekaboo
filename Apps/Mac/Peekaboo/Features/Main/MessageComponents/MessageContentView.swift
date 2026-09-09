@@ -108,21 +108,7 @@ struct AssistantMessageContent: View {
     let message: ConversationMessage
 
     var body: some View {
-        // Render assistant messages as Markdown
-        if let attributedString = try? AttributedString(
-            markdown: message.content,
-            options: AttributedString.MarkdownParsingOptions(
-                allowsExtendedAttributes: true,
-                interpretedSyntax: .inlineOnlyPreservingWhitespace))
-        {
-            Text(attributedString)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            Text(self.message.content)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        MarkdownMessageView(markdown: self.message.content)
     }
 }
 
