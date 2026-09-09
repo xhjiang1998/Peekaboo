@@ -185,6 +185,19 @@ private struct AppStateConnectionContext {
 }
 
 @MainActor
+private final class FloatingScreenshotChatCallbackRelay {
+    weak var controller: FloatingScreenshotChatPanelController?
+
+    func dismiss() {
+        self.controller?.dismiss()
+    }
+
+    func moveHorizontally(translation: CGFloat, startX: CGFloat) {
+        self.controller?.moveHorizontally(translation: translation, startX: startX)
+    }
+}
+
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let logger = Logger(subsystem: "boo.peekaboo.app", category: "App")
     private let launchPolicy: PeekabooAppLaunchPolicy
@@ -205,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissions: Permissions?
     private var agent: PeekabooAgent?
     private var captureAndAskCoordinator: CaptureAndAskCoordinator?
+    private var floatingScreenshotChatPanelController: FloatingScreenshotChatPanelController?
 
     // Visualizer components
     var visualizerCoordinator: VisualizerCoordinator?
@@ -261,17 +275,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.permissions = context.permissions
         self.agent = context.agent
 
-        if self.captureAndAskCoordinator == nil {
-            let windowPresenter = MainWindowPresenter(
-                sessionStore: context.sessionStore,
-                openWindow: { [weak self] in
-                    self?.openWindow(id: AgentSessionUI.mainWindowIdentifier)
-                })
+        if self.floatingScreenshotChatPanelController == nil {
+            let callbackRelay = FloatingScreenshotChatCallbackRelay()
+            let panelController = FloatingScreenshotChatPanelController { state in
+                FloatingScreenshotChatView(
+                    state: state,
+                    onClose: callbackRelay.dismiss,
+                    onHorizontalDrag: callbackRelay.moveHorizontally)
+                    .environment(context.agent)
+                    .environment(context.sessionStore)
+                    .environment(context.screenshotConversationService)
+            }
+            callbackRelay.controller = panelController
+            self.floatingScreenshotChatPanelController = panelController
+        }
+
+        if self.captureAndAskCoordinator == nil,
+           let conversationPresenter = self.floatingScreenshotChatPanelController
+        {
             self.captureAndAskCoordinator = CaptureAndAskCoordinator(
                 services: context.services,
                 selector: CaptureSelectionController(),
                 conversationService: context.screenshotConversationService,
-                windowPresenter: windowPresenter)
+                conversationPresenter: conversationPresenter)
         }
 
         if self.statusBarController == nil {

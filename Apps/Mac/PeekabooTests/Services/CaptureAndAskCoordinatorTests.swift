@@ -46,7 +46,8 @@ struct CaptureAndAskCoordinatorTests {
             },
             analyze: { sessionID in
                 events.append("analyze:\(sessionID)")
-            })
+            },
+            cancelConversation: { _ in })
 
         await coordinator.performCapture()
 
@@ -74,7 +75,8 @@ struct CaptureAndAskCoordinatorTests {
             },
             createConversation: { _ in "unused" },
             presentConversation: { _ in },
-            analyze: { _ in })
+            analyze: { _ in },
+            cancelConversation: { _ in })
 
         await coordinator.performCapture()
 
@@ -97,6 +99,7 @@ struct CaptureAndAskCoordinatorTests {
             createConversation: { _ in "unused" },
             presentConversation: { _ in },
             analyze: { _ in },
+            cancelConversation: { _ in },
             reportFailure: { reportedFailures.append($0) })
 
         await coordinator.performCapture()
@@ -121,6 +124,7 @@ struct CaptureAndAskCoordinatorTests {
             createConversation: { _ in "screenshot-session" },
             presentConversation: { _ in },
             analyze: { _ in throw TestFailure.analysis },
+            cancelConversation: { _ in },
             reportFailure: { reportedFailures.append($0) })
 
         await coordinator.performCapture()
@@ -143,7 +147,8 @@ struct CaptureAndAskCoordinatorTests {
             captureArea: { _ in Data() },
             createConversation: { _ in "unused" },
             presentConversation: { _ in },
-            analyze: { _ in })
+            analyze: { _ in },
+            cancelConversation: { _ in })
 
         coordinator.startCapture()
         coordinator.startCapture()
@@ -171,7 +176,8 @@ struct CaptureAndAskCoordinatorTests {
             presentConversation: { _ in },
             analyze: { _ in
                 try? await Task.sleep(for: .milliseconds(120))
-            })
+            },
+            cancelConversation: { _ in })
 
         coordinator.startCapture()
         try? await Task.sleep(for: .milliseconds(20))

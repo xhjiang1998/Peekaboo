@@ -78,7 +78,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         createConversation: @escaping ConversationCreator,
         presentConversation: @escaping ConversationPresenter,
         analyze: @escaping ConversationAnalyzer,
-        cancelConversation: @escaping ConversationCanceller = { _ in },
+        cancelConversation: @escaping ConversationCanceller,
         cancelSelection: @escaping () -> Void = {},
         reportFailure: @escaping (CaptureAndAskFailure) -> Void = { _ in })
     {
@@ -92,31 +92,6 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         self.cancelConversation = cancelConversation
         self.cancelSelection = cancelSelection
         self.reportFailure = reportFailure
-    }
-
-    convenience init(
-        permissionCheck: @escaping PermissionCheck,
-        selectArea: @escaping AreaSelector,
-        resolveCaptureRect: @escaping CaptureRectResolver,
-        captureArea: @escaping AreaCapture,
-        createConversation: @escaping ConversationCreator,
-        presentWindow: @escaping (String) -> Void,
-        analyze: @escaping ConversationAnalyzer,
-        cancelConversation: @escaping ConversationCanceller = { _ in },
-        cancelSelection: @escaping () -> Void = {},
-        reportFailure: @escaping (CaptureAndAskFailure) -> Void = { _ in })
-    {
-        self.init(
-            permissionCheck: permissionCheck,
-            selectArea: selectArea,
-            resolveCaptureRect: resolveCaptureRect,
-            captureArea: captureArea,
-            createConversation: createConversation,
-            presentConversation: { presentWindow($0.sessionID) },
-            analyze: analyze,
-            cancelConversation: cancelConversation,
-            cancelSelection: cancelSelection,
-            reportFailure: reportFailure)
     }
 
     convenience init(

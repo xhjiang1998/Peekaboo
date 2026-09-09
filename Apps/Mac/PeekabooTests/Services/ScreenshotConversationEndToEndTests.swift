@@ -33,7 +33,7 @@ struct ScreenshotConversationEndToEndTests {
             start: CGPoint(x: 10, y: 20),
             end: CGPoint(x: 210, y: 120),
             displayID: 7)!
-        var presentedSessionID: String?
+        var presentedContext: ScreenshotPresentationContext?
         let coordinator = CaptureAndAskCoordinator(
             permissionCheck: { true },
             selectArea: { selection },
@@ -42,11 +42,15 @@ struct ScreenshotConversationEndToEndTests {
             createConversation: { imageData in
                 try service.createConversation(imageData: imageData).id
             },
-            presentWindow: { presentedSessionID = $0 },
-            analyze: { try await service.analyze(sessionID: $0) })
+            presentConversation: { presentedContext = $0 },
+            analyze: { try await service.analyze(sessionID: $0) },
+            cancelConversation: { service.cancel(sessionID: $0) })
 
         await coordinator.performCapture()
-        let sessionID = try #require(presentedSessionID)
+        let context = try #require(presentedContext)
+        #expect(context.selectionRect == selection.rect)
+        #expect(context.displayID == selection.displayID)
+        let sessionID = context.sessionID
         try await service.sendFollowUp("追问一", sessionID: sessionID)
         try await service.sendFollowUp("追问二", sessionID: sessionID)
         try await service.sendFollowUp("追问三", sessionID: sessionID)
