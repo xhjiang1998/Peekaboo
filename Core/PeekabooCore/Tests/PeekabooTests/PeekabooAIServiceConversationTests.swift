@@ -7,6 +7,13 @@ import Testing
 @MainActor
 struct PeekabooAIServiceConversationTests {
     @Test
+    func `Model identifier preserves MiniMax China provider identity`() {
+        #expect(
+            PeekabooAIService.modelIdentifier(for: .minimaxCN(.m3)) ==
+                "minimax-cn/MiniMax-M3")
+    }
+
+    @Test
     func `Existing service resolves the current vision provider for every request`() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("peekaboo-conversation-provider-switch-\(UUID().uuidString)", isDirectory: true)
@@ -75,6 +82,22 @@ struct PeekabooAIServiceConversationTests {
         #expect(self.image(in: messages[0])?.mimeType == "image/png")
         #expect(self.image(in: messages[1]) == nil)
         #expect(self.image(in: messages[2]) == nil)
+    }
+
+    @Test
+    func `Text-only continuation never creates an image content part`() throws {
+        let turns = [
+            PeekabooAIService.ConversationTurn(role: .user, text: "Explain this screenshot"),
+            PeekabooAIService.ConversationTurn(role: .assistant, text: "It shows settings"),
+            PeekabooAIService.ConversationTurn(role: .user, text: "Explain the first answer"),
+        ]
+
+        let messages = try PeekabooAIService.makeImageConversationMessages(
+            imageData: nil,
+            turns: turns)
+
+        #expect(messages.count == 3)
+        #expect(messages.allSatisfy { self.image(in: $0) == nil })
     }
 
     @Test

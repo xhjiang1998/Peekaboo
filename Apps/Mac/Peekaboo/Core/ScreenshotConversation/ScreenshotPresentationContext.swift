@@ -3,7 +3,7 @@ import CoreGraphics
 struct ScreenshotPresentationContext: Equatable, Sendable {
     let sessionID: String
     let selectionRect: CGRect
-    let displayID: CGDirectDisplayID
+    let displayID: CGDirectDisplayID?
 }
 
 @MainActor

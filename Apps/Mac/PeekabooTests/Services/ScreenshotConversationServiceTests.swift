@@ -1,5 +1,6 @@
 import Foundation
 import PeekabooCore
+import Tachikoma
 import Testing
 @testable import Peekaboo
 
@@ -32,8 +33,10 @@ struct ScreenshotConversationServiceTests {
 
     @Test
     func `Follow-up reuses screenshot context and sends ordinary text history`() async throws {
+        var capturedImages: [Data?] = []
         var capturedTurns: [[PeekabooAIService.ConversationTurn]] = []
-        let fixture = self.makeFixture { _, turns, _ in
+        let fixture = self.makeFixture { imageData, turns, _ in
+            capturedImages.append(imageData)
             capturedTurns.append(turns)
             let answer = capturedTurns.count == 1 ? "初次答案" : "追问答案"
             return ScreenshotConversationAnalysis(provider: "anthropic", model: "claude-sonnet", text: answer)
@@ -45,6 +48,7 @@ struct ScreenshotConversationServiceTests {
         try await fixture.service.sendFollowUp("左下角数字是什么？", sessionID: session.id)
 
         #expect(capturedTurns.count == 2)
+        #expect(capturedImages == [Data([9, 8, 7]), nil])
         #expect(capturedTurns[1] == [
             .init(role: .user, text: ScreenshotConversationService.defaultPrompt),
             .init(role: .assistant, text: "初次答案"),
@@ -57,6 +61,77 @@ struct ScreenshotConversationServiceTests {
             "左下角数字是什么？",
             "追问答案",
         ])
+    }
+
+    @Test
+    func `Follow-up keeps the model pinned by the first screenshot request`() async throws {
+        var resolvedPins: [String?] = []
+        var analyzedModels: [LanguageModel?] = []
+        let fixture = self.makeFixture(
+            modelResolver: { pinnedModel in
+                resolvedPins.append(pinnedModel)
+                if let pinnedModel {
+                    return LanguageModel.parse(from: pinnedModel)
+                }
+                return .minimaxCN(.m3)
+            },
+            analyzer: { _, _, model in
+                analyzedModels.append(model)
+                return ScreenshotConversationAnalysis(
+                    provider: "minimax-cn",
+                    model: "MiniMax-M3",
+                    text: "答案-\(analyzedModels.count)")
+            })
+        defer { fixture.cleanup() }
+
+        let session = try fixture.service.createConversation(imageData: Data([1, 2, 3]))
+        try await fixture.service.analyze(sessionID: session.id)
+        try await fixture.service.sendFollowUp("继续", sessionID: session.id)
+
+        #expect(resolvedPins == [nil, "minimax-cn/MiniMax-M3"])
+        #expect(analyzedModels == [.minimaxCN(.m3), .minimaxCN(.m3)])
+        #expect(fixture.sessionStore.session(id: session.id)?.modelName == "minimax-cn/MiniMax-M3")
+    }
+
+    @Test
+    func `Restored screenshot session resolves its persisted pinned model`() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-screenshot-model-restore-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storageURL = root.appendingPathComponent("sessions.json")
+        let contextRoot = root.appendingPathComponent("contexts", isDirectory: true)
+        let firstStore = SessionStore(storageURL: storageURL)
+        let contextStore = ScreenshotConversationContextStore(rootDirectory: contextRoot)
+        let firstService = ScreenshotConversationService(
+            sessionStore: firstStore,
+            contextStore: contextStore,
+            modelResolver: { _ in .minimaxCN(.m3) },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "minimax-cn", model: "MiniMax-M3", text: "初次")
+            })
+        let session = try firstService.createConversation(imageData: Data([7, 8, 9]))
+        try await firstService.analyze(sessionID: session.id)
+        firstStore.saveSessions()
+
+        let restoredStore = SessionStore(storageURL: storageURL)
+        var restoredPins: [String?] = []
+        let restoredService = ScreenshotConversationService(
+            sessionStore: restoredStore,
+            contextStore: ScreenshotConversationContextStore(rootDirectory: contextRoot),
+            modelResolver: { pinnedModel in
+                restoredPins.append(pinnedModel)
+                return pinnedModel.flatMap { LanguageModel.parse(from: $0) }
+            },
+            analyzer: { imageData, _, model in
+                #expect(imageData == nil)
+                #expect(model == .minimaxCN(.m3))
+                return ScreenshotConversationAnalysis(provider: "minimax-cn", model: "MiniMax-M3", text: "追问")
+            })
+
+        try await restoredService.sendFollowUp("重启后的追问", sessionID: session.id)
+
+        #expect(restoredPins == ["minimax-cn/MiniMax-M3"])
     }
 
     @Test
@@ -110,7 +185,7 @@ struct ScreenshotConversationServiceTests {
         _ = ScreenshotConversationService(
             sessionStore: sessionStore,
             contextStore: contextStore,
-            modelResolver: { nil },
+            modelResolver: { _ in nil },
             analyzer: { _, _, _ in
                 ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
             })
@@ -137,7 +212,7 @@ struct ScreenshotConversationServiceTests {
         _ = ScreenshotConversationService(
             sessionStore: sessionStore,
             contextStore: contextStore,
-            modelResolver: { nil },
+            modelResolver: { _ in nil },
             analyzer: { _, _, _ in
                 ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
             })
@@ -183,7 +258,34 @@ struct ScreenshotConversationServiceTests {
         #expect(fixture.service.status(for: session.id) == .idle)
     }
 
+    @Test
+    func `Cancelling immediately invalidates a noncooperative request without allowing request buildup`() async throws {
+        let analyses = ControllableScreenshotAnalyses()
+        let fixture = self.makeFixture { _, _, _ in
+            await analyses.wait()
+        }
+        defer { fixture.cleanup() }
+        let session = try fixture.service.createConversation(imageData: Data([1, 2, 3]))
+        let firstRequest = Task { try await fixture.service.analyze(sessionID: session.id) }
+        await Task.yield()
+
+        fixture.service.cancel(sessionID: session.id)
+
+        await #expect(throws: ScreenshotConversationServiceError.requestAlreadyInProgress) {
+            try await fixture.service.sendFollowUp("不要堆积请求", sessionID: session.id)
+        }
+        analyses.finish(with: ScreenshotConversationAnalysis(
+            provider: "openai",
+            model: "gpt-5.5",
+            text: "迟到答案"))
+        _ = try? await firstRequest.value
+        let stored = try #require(fixture.sessionStore.session(id: session.id))
+        #expect(stored.messages.map(\.role) == [.user])
+        #expect(fixture.service.status(for: session.id) == .idle)
+    }
+
     private func makeFixture(
+        modelResolver: @escaping ScreenshotConversationService.ModelResolver = { _ in nil },
         analyzer: @escaping ScreenshotConversationService.Analyzer) -> Fixture
     {
         let root = FileManager.default.temporaryDirectory
@@ -195,13 +297,29 @@ struct ScreenshotConversationServiceTests {
         let service = ScreenshotConversationService(
             sessionStore: sessionStore,
             contextStore: contextStore,
-            modelResolver: { nil },
+            modelResolver: modelResolver,
             analyzer: analyzer)
         return Fixture(
             root: root,
             sessionStore: sessionStore,
             contextStore: contextStore,
             service: service)
+    }
+
+    @MainActor
+    private final class ControllableScreenshotAnalyses {
+        private var continuation: CheckedContinuation<ScreenshotConversationAnalysis, Never>?
+
+        func wait() async -> ScreenshotConversationAnalysis {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func finish(with result: ScreenshotConversationAnalysis) {
+            self.continuation?.resume(returning: result)
+            self.continuation = nil
+        }
     }
 
     private struct Fixture {

@@ -151,7 +151,8 @@ struct ScreenshotFollowUpComposer: View {
                     input,
                     sessionID: self.sessionID)
             } catch {
-                print("Screenshot follow-up failed: \(error.localizedDescription)")
+                // The service exposes a sanitized status message to the UI. Do not log
+                // provider errors here because they may contain response bodies or URLs.
             }
         }
     }

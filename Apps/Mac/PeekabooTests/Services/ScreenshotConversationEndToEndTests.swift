@@ -17,11 +17,11 @@ struct ScreenshotConversationEndToEndTests {
         let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
         let contextStore = ScreenshotConversationContextStore(
             rootDirectory: root.appendingPathComponent("contexts", isDirectory: true))
-        var requests: [(Data, [PeekabooAIService.ConversationTurn])] = []
+        var requests: [(Data?, [PeekabooAIService.ConversationTurn])] = []
         let service = ScreenshotConversationService(
             sessionStore: sessionStore,
             contextStore: contextStore,
-            modelResolver: { nil },
+            modelResolver: { _ in nil },
             analyzer: { imageData, turns, _ in
                 requests.append((imageData, turns))
                 return ScreenshotConversationAnalysis(
@@ -56,7 +56,7 @@ struct ScreenshotConversationEndToEndTests {
         try await service.sendFollowUp("追问三", sessionID: sessionID)
 
         #expect(requests.count == 4)
-        #expect(requests.allSatisfy { $0.0 == Data([1, 2, 3]) })
+        #expect(requests.map(\.0) == [Data([1, 2, 3]), nil, nil, nil])
         #expect(requests.map { $0.1.last?.text } == [
             ScreenshotConversationService.defaultPrompt,
             "追问一",

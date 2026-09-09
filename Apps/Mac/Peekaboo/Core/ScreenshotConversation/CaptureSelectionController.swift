@@ -66,9 +66,56 @@ protocol CaptureAreaSelecting: AnyObject {
 }
 
 @MainActor
+final class CaptureSelectionFocusController {
+    typealias RestoreAction = @MainActor () -> Void
+    typealias CaptureRestoreAction = @MainActor () -> RestoreAction?
+
+    private let captureRestoreAction: CaptureRestoreAction
+    private let activateForSelection: @MainActor () -> Void
+    private var restoreAction: RestoreAction?
+
+    init(
+        captureRestoreAction: @escaping CaptureRestoreAction,
+        activateForSelection: @escaping @MainActor () -> Void)
+    {
+        self.captureRestoreAction = captureRestoreAction
+        self.activateForSelection = activateForSelection
+    }
+
+    convenience init() {
+        self.init(
+            captureRestoreAction: {
+                guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+                return {
+                    application.activate()
+                }
+            },
+            activateForSelection: {
+                NSApp.activate(ignoringOtherApps: true)
+            })
+    }
+
+    func prepareForSelection() {
+        self.restoreAction = self.captureRestoreAction()
+        self.activateForSelection()
+    }
+
+    func restoreAfterSelection() {
+        let action = self.restoreAction
+        self.restoreAction = nil
+        action?()
+    }
+}
+
+@MainActor
 final class CaptureSelectionController: CaptureAreaSelecting {
     private var panels: [CaptureSelectionPanel] = []
     private var continuation: CheckedContinuation<CaptureSelection?, any Error>?
+    private let focusController: CaptureSelectionFocusController
+
+    init(focusController: CaptureSelectionFocusController = CaptureSelectionFocusController()) {
+        self.focusController = focusController
+    }
 
     func selectArea() async throws -> CaptureSelection? {
         if self.continuation != nil {
@@ -92,7 +139,7 @@ final class CaptureSelectionController: CaptureAreaSelecting {
             return
         }
 
-        NSApp.activate(ignoringOtherApps: true)
+        self.focusController.prepareForSelection()
         self.panels = screens.map { screen in
             let panel = CaptureSelectionPanel(screen: screen)
             let selectionView = CaptureSelectionView(
@@ -127,6 +174,7 @@ final class CaptureSelectionController: CaptureAreaSelecting {
         }
         self.panels.removeAll()
         NSCursor.arrow.set()
+        self.focusController.restoreAfterSelection()
         continuation?.resume(returning: selection)
     }
 

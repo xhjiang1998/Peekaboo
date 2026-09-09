@@ -30,6 +30,7 @@ enum ScreenshotConversationServiceError: Error, Equatable, LocalizedError {
     case sessionNotFound
     case imageContextMissing
     case requestAlreadyInProgress
+    case pinnedModelUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -41,6 +42,8 @@ enum ScreenshotConversationServiceError: Error, Equatable, LocalizedError {
             "原截图已丢失，请重新截图"
         case .requestAlreadyInProgress:
             "正在分析，请稍候"
+        case .pinnedModelUnavailable:
+            "该截图会话使用的模型当前不可用，请恢复对应 Provider 配置"
         }
     }
 }
@@ -49,10 +52,10 @@ enum ScreenshotConversationServiceError: Error, Equatable, LocalizedError {
 @MainActor
 final class ScreenshotConversationService {
     typealias Analyzer = (
-        _ imageData: Data,
+        _ imageData: Data?,
         _ turns: [PeekabooAIService.ConversationTurn],
         _ model: LanguageModel?) async throws -> ScreenshotConversationAnalysis
-    typealias ModelResolver = () throws -> LanguageModel?
+    typealias ModelResolver = (_ pinnedModelName: String?) throws -> LanguageModel?
 
     static let defaultPrompt = """
     请分析这张截图，提取关键信息并给出可直接使用的结论。
@@ -91,8 +94,14 @@ final class ScreenshotConversationService {
         self.init(
             sessionStore: sessionStore,
             contextStore: contextStore,
-            modelResolver: {
-                try settings.resolvedVisionModel(using: aiService)
+            modelResolver: { pinnedModelName in
+                if let pinnedModelName {
+                    guard let model = aiService.resolveConfiguredModel(pinnedModelName) else {
+                        throw ScreenshotConversationServiceError.pinnedModelUnavailable
+                    }
+                    return model
+                }
+                return try settings.resolvedVisionModel(using: aiService)
             },
             analyzer: { imageData, turns, model in
                 let result = try await aiService.analyzeImageConversation(
@@ -169,8 +178,23 @@ final class ScreenshotConversationService {
         guard let session = self.sessionStore.session(id: sessionID) else {
             throw ScreenshotConversationServiceError.sessionNotFound
         }
-        guard let imageData = try self.imageData(for: sessionID) else {
-            throw ScreenshotConversationServiceError.imageContextMissing
+        let isInitialRequest = !session.messages.contains(where: { $0.role == .assistant })
+        let imageData: Data?
+        if isInitialRequest {
+            guard let initialImageData = try self.imageData(for: sessionID) else {
+                throw ScreenshotConversationServiceError.imageContextMissing
+            }
+            imageData = initialImageData
+        } else {
+            imageData = nil
+        }
+
+        let pinnedModelName = session.modelName.isEmpty ? nil : session.modelName
+        let selectedModel = try self.modelResolver(pinnedModelName)
+        if pinnedModelName == nil, let selectedModel {
+            self.sessionStore.updateModelName(
+                PeekabooAIService.modelIdentifier(for: selectedModel),
+                for: session)
         }
 
         let requestID = UUID()
@@ -180,7 +204,7 @@ final class ScreenshotConversationService {
             try await self.analyzer(
                 imageData,
                 Self.turns(from: session.messages),
-                try self.modelResolver())
+                selectedModel)
         }
         self.activeRequestTasks[sessionID] = requestTask
 
@@ -189,6 +213,8 @@ final class ScreenshotConversationService {
             result = try await requestTask.value
         } catch {
             guard self.activeRequestIDs[sessionID] == requestID else {
+                self.activeRequestTasks[sessionID] = nil
+                self.statuses[sessionID] = .idle
                 return
             }
             self.activeRequestIDs[sessionID] = nil
@@ -202,6 +228,8 @@ final class ScreenshotConversationService {
         }
 
         guard self.activeRequestIDs[sessionID] == requestID else {
+            self.activeRequestTasks[sessionID] = nil
+            self.statuses[sessionID] = .idle
             return
         }
         self.activeRequestIDs[sessionID] = nil
@@ -217,9 +245,11 @@ final class ScreenshotConversationService {
         self.sessionStore.addMessage(
             ConversationMessage(role: .assistant, content: result.text),
             to: currentSession)
-        self.sessionStore.updateModelName(
-            "\(result.provider)/\(result.model)",
-            for: currentSession)
+        if currentSession.modelName.isEmpty {
+            self.sessionStore.updateModelName(
+                "\(result.provider)/\(result.model)",
+                for: currentSession)
+        }
         self.statuses[sessionID] = .ready
     }
 
@@ -249,6 +279,7 @@ final class ScreenshotConversationService {
             self.statuses[sessionID] = .idle
             return
         }
+        self.activeRequestIDs[sessionID] = nil
         self.statuses[sessionID] = .cancelling
         task.cancel()
     }

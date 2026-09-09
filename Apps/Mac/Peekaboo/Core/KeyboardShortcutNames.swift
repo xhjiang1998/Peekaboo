@@ -8,6 +8,7 @@ import KeyboardShortcuts
 
 enum PeekabooShortcutDefaults {
     static let captureAndAsk = KeyboardShortcuts.Shortcut(.q, modifiers: [.option])
+    static let captureAndAskDisplayText = "⌥Q"
 }
 
 extension KeyboardShortcuts.Name {

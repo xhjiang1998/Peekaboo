@@ -9,10 +9,15 @@ struct ScreenshotConversationContext: Codable, Equatable, Sendable {
 enum ScreenshotConversationContextStoreError: Error, Equatable {
     case mismatchedSessionID
     case unsafeImageFileName
+    case unsafeFileType
+    case fileTooLarge
 }
 
 @MainActor
 final class ScreenshotConversationContextStore {
+    static let maximumImageBytes = 50 * 1024 * 1024
+    static let maximumContextBytes = 64 * 1024
+
     private let fileManager: FileManager
     private let rootDirectory: URL
     private let contextsDirectory: URL
@@ -30,6 +35,9 @@ final class ScreenshotConversationContextStore {
 
     @discardableResult
     func save(imageData: Data, for sessionID: UUID) throws -> ScreenshotConversationContext {
+        guard imageData.count <= Self.maximumImageBytes else {
+            throw ScreenshotConversationContextStoreError.fileTooLarge
+        }
         try self.createDirectoriesIfNeeded()
 
         let imageFileName = Self.imageFileName(for: sessionID)
@@ -41,10 +49,12 @@ final class ScreenshotConversationContextStore {
         let contextURL = self.contextURL(for: sessionID)
 
         try imageData.write(to: imageURL, options: .atomic)
+        try self.setPrivateFilePermissions(at: imageURL)
 
         do {
             let contextData = try self.encoder.encode(context)
             try contextData.write(to: contextURL, options: .atomic)
+            try self.setPrivateFilePermissions(at: contextURL)
         } catch {
             try? self.fileManager.removeItem(at: imageURL)
             throw error
@@ -61,7 +71,7 @@ final class ScreenshotConversationContextStore {
 
         let context = try self.decoder.decode(
             ScreenshotConversationContext.self,
-            from: Data(contentsOf: url))
+            from: self.readRegularFile(at: url, maximumBytes: Self.maximumContextBytes))
         guard context.sessionID == sessionID else {
             throw ScreenshotConversationContextStoreError.mismatchedSessionID
         }
@@ -80,7 +90,7 @@ final class ScreenshotConversationContextStore {
         guard self.fileManager.fileExists(atPath: imageURL.path) else {
             return nil
         }
-        return try Data(contentsOf: imageURL)
+        return try self.readRegularFile(at: imageURL, maximumBytes: Self.maximumImageBytes)
     }
 
     func hasImage(for sessionID: UUID) throws -> Bool {
@@ -90,9 +100,9 @@ final class ScreenshotConversationContextStore {
         let imageURL = self.imagesDirectory.appendingPathComponent(
             context.imageFileName,
             isDirectory: false)
-        var isDirectory: ObjCBool = false
-        return self.fileManager.fileExists(atPath: imageURL.path, isDirectory: &isDirectory) &&
-            !isDirectory.boolValue
+        guard self.fileManager.fileExists(atPath: imageURL.path) else { return false }
+        try self.validateRegularFile(at: imageURL, maximumBytes: Self.maximumImageBytes)
+        return true
     }
 
     func removeContext(for sessionID: UUID) throws {
@@ -144,7 +154,9 @@ final class ScreenshotConversationContextStore {
             guard let sessionID = UUID(uuidString: contextURL.deletingPathExtension().lastPathComponent),
                   let context = try? self.decoder.decode(
                       ScreenshotConversationContext.self,
-                      from: Data(contentsOf: contextURL)),
+                      from: self.readRegularFile(
+                          at: contextURL,
+                          maximumBytes: Self.maximumContextBytes)),
                   context.sessionID == sessionID,
                   (try? Self.validate(imageFileName: context.imageFileName)) != nil
             else {
@@ -195,13 +207,19 @@ final class ScreenshotConversationContextStore {
     private func createDirectoriesIfNeeded() throws {
         try self.fileManager.createDirectory(
             at: self.rootDirectory,
-            withIntermediateDirectories: true)
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
         try self.fileManager.createDirectory(
             at: self.contextsDirectory,
-            withIntermediateDirectories: true)
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
         try self.fileManager.createDirectory(
             at: self.imagesDirectory,
-            withIntermediateDirectories: true)
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        for directory in [self.rootDirectory, self.contextsDirectory, self.imagesDirectory] {
+            try self.fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        }
     }
 
     private func referencedImageFileNames() throws -> Set<String> {
@@ -212,7 +230,9 @@ final class ScreenshotConversationContextStore {
         var imageFileNames = Set<String>()
 
         for contextURL in contextURLs where contextURL.pathExtension.lowercased() == "json" {
-            guard let data = try? Data(contentsOf: contextURL),
+            guard let data = try? self.readRegularFile(
+                at: contextURL,
+                maximumBytes: Self.maximumContextBytes),
                   let context = try? self.decoder.decode(ScreenshotConversationContext.self, from: data)
             else {
                 continue
@@ -234,5 +254,25 @@ final class ScreenshotConversationContextStore {
             return
         }
         try self.fileManager.removeItem(at: url)
+    }
+
+    private func setPrivateFilePermissions(at url: URL) throws {
+        try self.fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    private func readRegularFile(at url: URL, maximumBytes: Int) throws -> Data {
+        try self.validateRegularFile(at: url, maximumBytes: maximumBytes)
+        return try Data(contentsOf: url, options: [.mappedIfSafe])
+    }
+
+    private func validateRegularFile(at url: URL, maximumBytes: Int) throws {
+        let attributes = try self.fileManager.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            throw ScreenshotConversationContextStoreError.unsafeFileType
+        }
+        let fileSize = (attributes[.size] as? NSNumber)?.uint64Value ?? UInt64.max
+        guard fileSize <= UInt64(maximumBytes) else {
+            throw ScreenshotConversationContextStoreError.fileTooLarge
+        }
     }
 }

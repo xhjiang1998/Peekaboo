@@ -201,7 +201,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             return nil
         }
 
-        if let previousSessionID = self.latestSessionID, self.analysisTask != nil {
+        if let previousSessionID = self.latestSessionID, previousSessionID != sessionID {
             self.cancelConversation(previousSessionID)
             self.analysisTask?.cancel()
         }

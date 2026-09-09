@@ -193,7 +193,7 @@ private struct FloatingScreenshotChatHeader: View {
     let onTogglePreview: () -> Void
     let onHorizontalDrag: (_ translation: CGFloat, _ startX: CGFloat) -> Void
 
-    @State private var window: NSWindow?
+    @State private var windowBox = WeakFloatingWindowBox()
     @State private var dragStartX: CGFloat?
 
     var body: some View {
@@ -220,7 +220,7 @@ private struct FloatingScreenshotChatHeader: View {
             .gesture(self.dragGesture)
             .background {
                 FloatingWindowReader { window in
-                    self.window = window
+                    self.windowBox.window = window
                 }
             }
 
@@ -244,7 +244,7 @@ private struct FloatingScreenshotChatHeader: View {
         DragGesture(minimumDistance: 2)
             .onChanged { value in
                 if self.dragStartX == nil {
-                    self.dragStartX = self.window?.frame.minX
+                    self.dragStartX = self.windowBox.window?.frame.minX
                 }
                 guard let dragStartX = self.dragStartX else { return }
                 self.onHorizontalDrag(value.translation.width, dragStartX)
@@ -253,6 +253,11 @@ private struct FloatingScreenshotChatHeader: View {
                 self.dragStartX = nil
             }
     }
+}
+
+@MainActor
+private final class WeakFloatingWindowBox {
+    weak var window: NSWindow?
 }
 
 private struct FloatingWindowReader: NSViewRepresentable {

@@ -276,9 +276,10 @@ public final class PeekabooAIService {
     }
 
     /// Continue a screenshot-backed conversation. The image is attached only to the
-    /// first user message; later turns remain ordinary text messages.
+    /// initial request. Callers pass `nil` for follow-ups so the PNG is neither read
+    /// nor uploaded again; the retained turns remain ordinary text messages.
     public func analyzeImageConversation(
-        imageData: Data,
+        imageData: Data?,
         turns: [ConversationTurn],
         model: LanguageModel? = nil) async throws -> AnalysisResult
     {
@@ -294,13 +295,13 @@ public final class PeekabooAIService {
         let normalizedText = Self.normalizeCoordinateTextIfNeeded(
             response.text,
             model: modelName,
-            imageSize: Self.imageSize(from: imageData))
+            imageSize: imageData.flatMap { Self.imageSize(from: $0) })
 
         return AnalysisResult(provider: provider, model: modelName, text: normalizedText)
     }
 
     static func makeImageConversationMessages(
-        imageData: Data,
+        imageData: Data?,
         turns: [ConversationTurn]) throws -> [ModelMessage]
     {
         guard let firstUserIndex = turns.firstIndex(where: { $0.role == .user }) else {
@@ -313,13 +314,19 @@ public final class PeekabooAIService {
         }
         retainedTurns = Self.trimmingConversationText(retainedTurns, limit: 32_000)
 
-        let imageContent = ModelMessage.ContentPart.ImageContent(
-            data: imageData.base64EncodedString(),
-            mimeType: "image/png")
+        let imageContent = imageData.map {
+            ModelMessage.ContentPart.ImageContent(
+                data: $0.base64EncodedString(),
+                mimeType: "image/png")
+        }
         return retainedTurns.enumerated().map { index, turn in
             switch turn.role {
             case .user where index == 0:
-                ModelMessage.user(text: turn.text, images: [imageContent])
+                if let imageContent {
+                    ModelMessage.user(text: turn.text, images: [imageContent])
+                } else {
+                    ModelMessage.user(turn.text)
+                }
             case .user:
                 ModelMessage.user(turn.text)
             case .assistant:
@@ -424,6 +431,12 @@ public final class PeekabooAIService {
     /// Resolve a user/config provider reference, including custom providers registered in Peekaboo config.
     public func resolveConfiguredModel(_ modelString: String) -> LanguageModel? {
         Self.parseProviderEntry(modelString, configuration: self.configuration)
+    }
+
+    /// Stable provider-qualified identity suitable for persisting a session's model choice.
+    public static func modelIdentifier(for model: LanguageModel) -> String {
+        let identity = Self.providerAndModelName(for: model)
+        return "\(identity.provider)/\(identity.model)"
     }
 
     /// Return true when an enabled custom provider owns this provider identifier.

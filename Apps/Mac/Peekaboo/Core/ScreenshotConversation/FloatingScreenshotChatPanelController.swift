@@ -38,7 +38,9 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
 
     func present(_ context: ScreenshotPresentationContext) {
         self.state.present(context)
-        guard let visibleFrame = self.visibleFrameForDisplay(context.displayID) else {
+        guard let displayID = context.displayID,
+              let visibleFrame = self.visibleFrameForDisplay(displayID)
+        else {
             self.panel?.orderOut(nil)
             return
         }
@@ -71,7 +73,8 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
     func moveHorizontally(translation: CGFloat, startX: CGFloat) {
         guard let panel = self.panel,
               let context = self.state.currentContext,
-              let visibleFrame = self.visibleFrameForDisplay(context.displayID)
+              let displayID = context.displayID,
+              let visibleFrame = self.visibleFrameForDisplay(displayID)
         else {
             return
         }

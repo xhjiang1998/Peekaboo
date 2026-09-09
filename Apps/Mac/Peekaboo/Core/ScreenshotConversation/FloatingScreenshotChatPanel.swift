@@ -40,7 +40,7 @@ final class FloatingScreenshotChatPanel: NSPanel, FloatingPanelControlling {
         self.hidesOnDeactivate = false
         self.becomesKeyOnlyIfNeeded = true
         self.isReleasedWhenClosed = false
-        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        self.collectionBehavior = [.fullScreenAuxiliary]
         self.contentView = NSHostingView(rootView: rootView())
     }
 

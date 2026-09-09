@@ -118,6 +118,27 @@ struct FloatingScreenshotChatPanelControllerTests {
     }
 
     @Test
+    func missingDisplayIdentityUpdatesStateAndHidesVisibleOldPanel() throws {
+        let fixture = PanelControllerFixture()
+        fixture.controller.present(Self.context(
+            sessionID: "valid-a",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: 7))
+        let missingIdentity = Self.context(
+            sessionID: "missing-display-identity",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: nil)
+
+        fixture.controller.present(missingIdentity)
+
+        let panel = try #require(fixture.createdPanels.first)
+        #expect(fixture.controller.state.currentContext == missingIdentity)
+        #expect(!panel.isVisible)
+        #expect(panel.orderOutCallCount == 1)
+        #expect(fixture.requestedDisplayIDs == [7])
+    }
+
+    @Test
     func unresolvedNewDisplayReplacesStateAndHidesVisibleOldPanel() throws {
         let fixture = PanelControllerFixture()
         fixture.controller.present(Self.context(
@@ -143,7 +164,7 @@ struct FloatingScreenshotChatPanelControllerTests {
     private static func context(
         sessionID: String,
         selectionRect: CGRect,
-        displayID: CGDirectDisplayID) -> ScreenshotPresentationContext
+        displayID: CGDirectDisplayID?) -> ScreenshotPresentationContext
     {
         ScreenshotPresentationContext(
             sessionID: sessionID,

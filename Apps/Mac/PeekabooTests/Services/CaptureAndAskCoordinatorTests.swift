@@ -85,6 +85,25 @@ struct CaptureAndAskCoordinatorTests {
     }
 
     @Test
+    func `Selection focus restores the original application exactly once`() {
+        var events: [String] = []
+        let focus = CaptureSelectionFocusController(
+            captureRestoreAction: {
+                events.append("capture-frontmost")
+                return { events.append("restore-frontmost") }
+            },
+            activateForSelection: {
+                events.append("activate-peekaboo")
+            })
+
+        focus.prepareForSelection()
+        focus.restoreAfterSelection()
+        focus.restoreAfterSelection()
+
+        #expect(events == ["capture-frontmost", "activate-peekaboo", "restore-frontmost"])
+    }
+
+    @Test
     func `Missing screen recording permission stops before selection`() async {
         var didSelect = false
         var reportedFailures: [CaptureAndAskFailure] = []
@@ -336,6 +355,31 @@ struct CaptureAndAskCoordinatorTests {
         #expect(staleAnalysisFinished)
         #expect(coordinator.state == .ready(sessionID: "session-b"))
         #expect(reportedFailures.isEmpty)
+    }
+
+    @Test
+    func `New capture cancels prior session request even after coordinator analysis finished`() async {
+        let selection = CaptureSelection(
+            start: CGPoint(x: 10, y: 20),
+            end: CGPoint(x: 210, y: 120),
+            displayID: 7)!
+        var sessionIDs = ["session-a", "session-b"]
+        var cancelledSessionIDs: [String] = []
+        let coordinator = CaptureAndAskCoordinator(
+            permissionCheck: { true },
+            selectArea: { selection },
+            resolveCaptureRect: { $0 },
+            captureArea: { _ in Data([1, 2, 3]) },
+            createConversation: { _ in sessionIDs.removeFirst() },
+            presentConversation: { _ in },
+            analyze: { _ in },
+            cancelConversation: { cancelledSessionIDs.append($0) })
+
+        await coordinator.performCapture()
+        await coordinator.performCapture()
+
+        #expect(cancelledSessionIDs == ["session-a"])
+        #expect(coordinator.state == .ready(sessionID: "session-b"))
     }
 
     private func waitUntil(_ condition: () -> Bool) async -> Bool {

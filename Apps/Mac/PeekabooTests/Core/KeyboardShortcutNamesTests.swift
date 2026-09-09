@@ -7,6 +7,7 @@ struct KeyboardShortcutNamesTests {
     @Test
     func `capture and ask defaults to option q`() {
         #expect(PeekabooShortcutDefaults.captureAndAsk == .init(.q, modifiers: [.option]))
+        #expect(PeekabooShortcutDefaults.captureAndAskDisplayText == "⌥Q")
         #expect(KeyboardShortcuts.Name.captureAndAsk.initialShortcut == PeekabooShortcutDefaults.captureAndAsk)
     }
 

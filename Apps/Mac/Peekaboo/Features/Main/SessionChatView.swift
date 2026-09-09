@@ -192,7 +192,7 @@ struct SessionChatView: View {
         } else if self.isScreenshotConversation {
             "继续追问这张截图…"
         } else if !self.settings.agentModeEnabled {
-            "请在设置中启用 Agent，或使用 ⌥⌘A 截图提问"
+            "请在设置中启用 Agent，或使用 \(PeekabooShortcutDefaults.captureAndAskDisplayText) 截图提问"
         } else if self.agent.isProcessing, self.isCurrentSession {
             "Ask a follow-up question..."
         } else {
