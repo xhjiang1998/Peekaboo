@@ -292,6 +292,52 @@ struct CaptureAndAskCoordinatorTests {
         #expect(reportedFailures.isEmpty)
     }
 
+    @Test
+    func `Late cancellation from superseded analysis cannot replace latest ready state`() async {
+        let selection = CaptureSelection(
+            start: CGPoint(x: 10, y: 20),
+            end: CGPoint(x: 210, y: 120),
+            displayID: 7)!
+        let analyses = ControllableAnalyses()
+        var sessionIDs = ["session-a", "session-b"]
+        var reportedFailures: [CaptureAndAskFailure] = []
+        let coordinator = CaptureAndAskCoordinator(
+            permissionCheck: { true },
+            selectArea: { selection },
+            resolveCaptureRect: { $0 },
+            captureArea: { _ in Data([1, 2, 3]) },
+            createConversation: { _ in sessionIDs.removeFirst() },
+            presentConversation: { _ in },
+            analyze: { try await analyses.wait(for: $0) },
+            cancelConversation: { _ in },
+            reportFailure: { reportedFailures.append($0) })
+
+        coordinator.startCapture()
+        let firstAnalysisStarted = await self.waitUntil {
+            analyses.startedSessionIDs == ["session-a"]
+        }
+        #expect(firstAnalysisStarted)
+        coordinator.startCapture()
+        let secondAnalysisStarted = await self.waitUntil {
+            analyses.startedSessionIDs == ["session-a", "session-b"]
+        }
+        #expect(secondAnalysisStarted)
+
+        analyses.succeed("session-b")
+        let latestAnalysisFinished = await self.waitUntil {
+            coordinator.state == .ready(sessionID: "session-b")
+        }
+        #expect(latestAnalysisFinished)
+
+        analyses.cancel("session-a")
+        let staleAnalysisFinished = await self.waitUntil {
+            analyses.finishedSessionIDs.contains("session-a")
+        }
+        #expect(staleAnalysisFinished)
+        #expect(coordinator.state == .ready(sessionID: "session-b"))
+        #expect(reportedFailures.isEmpty)
+    }
+
     private func waitUntil(_ condition: () -> Bool) async -> Bool {
         for _ in 0..<1000 {
             if condition() {
@@ -326,6 +372,10 @@ struct CaptureAndAskCoordinatorTests {
 
         func fail(_ sessionID: String) {
             self.continuations.removeValue(forKey: sessionID)?.resume(throwing: TestFailure.analysis)
+        }
+
+        func cancel(_ sessionID: String) {
+            self.continuations.removeValue(forKey: sessionID)?.resume(throwing: CancellationError())
         }
     }
 }

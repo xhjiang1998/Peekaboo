@@ -93,6 +93,8 @@ enum MarkdownMessageTextStyle: Equatable {
 }
 
 enum MarkdownMessageRenderer {
+    private static let allowedLinkSchemes = Set(["http", "https", "mailto"])
+
     static func textStyle(for block: MarkdownDisplayBlock) -> MarkdownMessageTextStyle {
         guard case let .heading(level, _) = block else {
             return .body
@@ -114,6 +116,16 @@ enum MarkdownMessageRenderer {
             self.append(node, to: &result, style: .init(baseFont: self.font(for: block)))
         }
         return result
+    }
+
+    static func safeLinkURL(for destination: String) -> URL? {
+        guard let url = URL(string: destination),
+              let scheme = url.scheme?.lowercased(),
+              self.allowedLinkSchemes.contains(scheme)
+        else {
+            return nil
+        }
+        return url
     }
 
     static func font(for block: MarkdownDisplayBlock) -> Font {
@@ -172,7 +184,7 @@ enum MarkdownMessageRenderer {
                 isStrong: style.isStrong,
                 isEmphasized: style.isEmphasized,
                 isCode: style.isCode,
-                link: URL(string: destination))
+                link: self.safeLinkURL(for: destination))
             for child in label {
                 self.append(child, to: &result, style: style)
             }
