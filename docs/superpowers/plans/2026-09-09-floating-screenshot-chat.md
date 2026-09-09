@@ -334,6 +334,7 @@ Match displayID with NSScreenNumber. Create the panel once, size it with min(600
 **Files:**
 - Create: Apps/Mac/Peekaboo/Features/ScreenshotConversation/ScreenshotConversationComponents.swift
 - Create: Apps/Mac/Peekaboo/Features/ScreenshotConversation/FloatingScreenshotChatView.swift
+- Modify: Apps/Mac/Peekaboo/Features/ScreenshotConversation/FloatingScreenshotChatState.swift
 - Modify: Apps/Mac/Peekaboo/Features/Main/SessionChatView.swift
 - Test: Apps/Mac/PeekabooTests/Views/FloatingScreenshotChatStateTests.swift
 
@@ -437,13 +438,13 @@ Track captureTask and analysisTask separately plus latestSessionID. Selection re
 **Files:**
 - Modify: Apps/Mac/Peekaboo/PeekabooApp.swift
 - Modify: Apps/Mac/Peekaboo/Core/KeyboardShortcutNames.swift
-- Test: Apps/Mac/PeekabooTests/Core/PeekabooAppLaunchPolicyTests.swift
+- Create: Apps/Mac/PeekabooTests/Core/KeyboardShortcutNamesTests.swift
 
 **Interfaces:**
 - Consumes: connected SessionStore, ScreenshotConversationService and app environment.
 - Produces: one retained panel controller wired to the global shortcut.
 
-- [ ] **Step 1: Add failing assembly and shortcut expectations**
+- [ ] **Step 1: Add the failing shortcut expectation**
 
 Extract a stable shortcut default for testing if KeyboardShortcuts does not expose the registered default:
 
@@ -451,14 +452,16 @@ Extract a stable shortcut default for testing if KeyboardShortcuts does not expo
         static let captureAndAsk = KeyboardShortcuts.Shortcut(.q, modifiers: [.option])
     }
 
-Assert the registered captureAndAsk name uses that value. Add an AppDelegate assembly seam and assert connecting state twice constructs one floating presenter and one coordinator.
+Assert the registered captureAndAsk name uses that value. PeekabooApp.swift is excluded from the Swift Package test
+target, so application assembly is verified by the Mac app build in Step 4; the panel and coordinator lifecycle
+remain covered through their included-module unit tests.
 
 - [ ] **Step 2: Run and verify red state**
 
     swift test --package-path Apps/Mac --filter CaptureAndAsk
-    swift test --package-path Apps/Mac --filter PeekabooAppLaunchPolicyTests
+    swift test --package-path Apps/Mac --filter KeyboardShortcutNamesTests
 
-Expected: shortcut assertion and floating-presenter assembly fail.
+Expected: the shortcut assertion fails because the current default is Option-Command-A.
 
 - [ ] **Step 3: Wire the controller**
 
@@ -479,9 +482,9 @@ Stored custom shortcuts continue to override the new default.
 - [ ] **Step 4: Test, build and commit**
 
     swift test --package-path Apps/Mac --filter CaptureAndAsk
-    swift test --package-path Apps/Mac --filter PeekabooAppLaunchPolicyTests
+    swift test --package-path Apps/Mac --filter KeyboardShortcutNamesTests
     swift build --package-path Apps/Mac
-    git add Apps/Mac/Peekaboo/PeekabooApp.swift Apps/Mac/Peekaboo/Core/KeyboardShortcutNames.swift Apps/Mac/PeekabooTests/Core/PeekabooAppLaunchPolicyTests.swift
+    git add Apps/Mac/Peekaboo/PeekabooApp.swift Apps/Mac/Peekaboo/Core/KeyboardShortcutNames.swift Apps/Mac/PeekabooTests/Core/KeyboardShortcutNamesTests.swift
     git commit -m "feat(mac): open screenshot chat with option q"
 
 ---
@@ -544,4 +547,3 @@ Use the existing remote macOS build and packaging workflow from the final commit
     git log --oneline bb0749f..HEAD
 
 Report the App or DMG absolute path, checksum, exact tests, manual acceptance results and any environment-limited checks.
-
