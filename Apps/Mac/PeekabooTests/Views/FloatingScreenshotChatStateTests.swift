@@ -12,8 +12,11 @@ struct FloatingScreenshotChatStateTests {
         let second = Self.context(sessionID: "second")
 
         state.present(first)
+        #expect(!state.isPreviewExpanded)
         state.togglePreview()
+        #expect(state.isPreviewExpanded)
         state.markDismissed()
+        #expect(state.isDismissedForCurrentPresentation)
         state.present(second)
 
         #expect(state.currentContext == second)
@@ -21,6 +24,19 @@ struct FloatingScreenshotChatStateTests {
         #expect(state.presentationGeneration == 2)
         #expect(state.dismissedGeneration == nil)
         #expect(!state.isDismissedForCurrentPresentation)
+    }
+
+    @Test
+    func sharedScreenshotControlsUseTheFloatingCardLayoutContract() {
+        #expect(ScreenshotPreviewCard.collapsedHeight == 100)
+        #expect(ScreenshotPreviewCard.expandedMaximumHeight == 280)
+        #expect(FloatingScreenshotChatView.cardWidth == 460)
+    }
+
+    @Test
+    func followUpComposerTrimsInputBeforeSubmission() {
+        #expect(ScreenshotFollowUpComposer.normalizedInput("  继续解释\n") == "继续解释")
+        #expect(ScreenshotFollowUpComposer.normalizedInput(" \n\t ").isEmpty)
     }
 
     @Test

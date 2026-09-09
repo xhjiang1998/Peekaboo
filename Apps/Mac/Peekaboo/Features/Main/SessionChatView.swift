@@ -56,7 +56,8 @@ struct SessionChatView: View {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         if self.isScreenshotConversation {
                             ScreenshotPreviewCard(
-                                sessionID: self.session.id)
+                                sessionID: self.session.id,
+                                isExpanded: true)
                                 .id(self.session.id)
                         }
 
@@ -73,13 +74,8 @@ struct SessionChatView: View {
 
                         // Show progress indicator for active session
                         if self.isCurrentSession, self.isScreenshotBusy {
-                            HStack(spacing: 10) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text(self.screenshotStatus == .cancelling ? "正在停止分析…" : "正在分析截图…")
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
+                            ScreenshotConversationProgressView(
+                                isCancelling: self.screenshotStatus == .cancelling)
                             .id("screenshot-progress")
                             .padding(.top, 8)
                         } else if self.isCurrentSession,
@@ -137,7 +133,15 @@ struct SessionChatView: View {
                     Divider()
                 }
 
-                self.textInputArea
+                if self.isScreenshotConversation {
+                    ScreenshotFollowUpComposer(
+                        sessionID: self.session.id,
+                        placeholder: self.placeholderText,
+                        canSubmit: self.canSubmit,
+                        isBusy: self.isScreenshotBusy)
+                } else {
+                    self.textInputArea
+                }
             }
         }
     }
@@ -153,19 +157,7 @@ struct SessionChatView: View {
                     self.submitInput()
                 }
 
-            if self.screenshotStatus == .analyzing {
-                Button(action: {
-                    self.screenshotConversationService.cancel(sessionID: self.session.id)
-                }, label: {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.title2)
-                        .foregroundColor(.red)
-                })
-                .buttonStyle(.plain)
-                .help("停止分析")
-            } else if !self.isScreenshotConversation,
-                      self.agent.isProcessing,
-                      self.isCurrentSession
+            if self.agent.isProcessing, self.isCurrentSession
             {
                 // Show stop button during execution
                 Button(action: {
@@ -228,23 +220,9 @@ struct SessionChatView: View {
         // Clear input immediately
         self.inputText = ""
 
-        switch self.screenshotRoute {
-        case .screenshotAvailable:
-            Task {
-                do {
-                    try await self.screenshotConversationService.sendFollowUp(
-                        trimmedInput,
-                        sessionID: self.session.id)
-                } catch {
-                    print("Screenshot follow-up failed: \(error.localizedDescription)")
-                }
-            }
-            return
-        case .screenshotContextMissing:
-            return
-        case .ordinary:
-            guard self.settings.agentModeEnabled else { return }
-        }
+        guard self.screenshotRoute == .ordinary,
+              self.settings.agentModeEnabled
+        else { return }
 
         if self.agent.isProcessing, self.isCurrentSession {
             // During execution, just add as a follow-up message
@@ -279,64 +257,6 @@ struct SessionChatView: View {
                 }
             }
         }
-    }
-}
-
-private struct ScreenshotPreviewCard: View {
-    @Environment(ScreenshotConversationService.self) private var screenshotConversationService
-    let sessionID: String
-    @State private var imageData: Data?
-
-    var body: some View {
-        Group {
-            if let imageData, let image = NSImage(data: imageData) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("截图上下文", systemImage: "viewfinder")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 560, maxHeight: 280, alignment: .leading)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .padding(10)
-                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
-            } else {
-                Label("原截图已丢失，请重新截图", systemImage: "exclamationmark.triangle")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .padding(10)
-                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: self.sessionID) {
-            self.imageData = try? self.screenshotConversationService.imageData(for: self.sessionID)
-        }
-    }
-}
-
-private struct ScreenshotAnalysisErrorBanner: View {
-    let message: String
-    let retry: (() -> Void)?
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.red)
-            Spacer()
-            if let retry {
-                Button("重试", action: retry)
-                    .buttonStyle(.link)
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(Color.red.opacity(0.08))
     }
 }
 
