@@ -21,7 +21,7 @@ struct ScreenshotConversationEndToEndTests {
         let service = ScreenshotConversationService(
             sessionStore: sessionStore,
             contextStore: contextStore,
-            modelResolver: { _ in nil },
+            modelResolver: { _ in .openai(.gpt55) },
             analyzer: { imageData, turns, _ in
                 requests.append((imageData, turns))
                 return ScreenshotConversationAnalysis(

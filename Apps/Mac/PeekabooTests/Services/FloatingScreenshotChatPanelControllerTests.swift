@@ -1,10 +1,25 @@
+import AppKit
 import CoreGraphics
+import SwiftUI
 import Testing
 @testable import Peekaboo
 
 @Suite(.tags(.services, .unit))
 @MainActor
 struct FloatingScreenshotChatPanelControllerTests {
+    @Test
+    func panelMovesToTheActiveSpaceAndSupportsFullScreenWithoutJoiningEverySpace() {
+        let panel = FloatingScreenshotChatPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 460, height: 600),
+            onEscape: {}) {
+                EmptyView()
+            }
+
+        #expect(panel.collectionBehavior.contains(.moveToActiveSpace))
+        #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+        #expect(!panel.collectionBehavior.contains(.canJoinAllSpaces))
+    }
+
     @Test
     func repeatedPresentationReusesOnePanelAndReplacesStateWithoutActivatingApp() throws {
         let first = Self.context(

@@ -14,7 +14,7 @@ struct ScreenshotConversationServiceTests {
             #expect(turns == [
                 .init(role: .user, text: ScreenshotConversationService.defaultPrompt),
             ])
-            #expect(model == nil)
+            #expect(model == .openai(.gpt55))
             return ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "这是答案")
         }
         defer { fixture.cleanup() }
@@ -66,12 +66,15 @@ struct ScreenshotConversationServiceTests {
     @Test
     func `Follow-up keeps the model pinned by the first screenshot request`() async throws {
         var resolvedPins: [String?] = []
-        var analyzedModels: [LanguageModel?] = []
+        var analyzedModels: [LanguageModel] = []
         let fixture = self.makeFixture(
             modelResolver: { pinnedModel in
                 resolvedPins.append(pinnedModel)
                 if let pinnedModel {
-                    return LanguageModel.parse(from: pinnedModel)
+                    guard let model = LanguageModel.parse(from: pinnedModel) else {
+                        throw ScreenshotConversationServiceError.pinnedModelUnavailable
+                    }
+                    return model
                 }
                 return .minimaxCN(.m3)
             },
@@ -91,6 +94,116 @@ struct ScreenshotConversationServiceTests {
         #expect(resolvedPins == [nil, "minimax-cn/MiniMax-M3"])
         #expect(analyzedModels == [.minimaxCN(.m3), .minimaxCN(.m3)])
         #expect(fixture.sessionStore.session(id: session.id)?.modelName == "minimax-cn/MiniMax-M3")
+    }
+
+    @Test
+    func `Automatic model is pinned before a failed first request and retry keeps that model`() async throws {
+        var automaticModel = LanguageModel.minimaxCN(.m3)
+        var resolvedPins: [String?] = []
+        var analyzedModels: [LanguageModel] = []
+        var analysisCount = 0
+        let fixture = self.makeFixture(
+            modelResolver: { pinnedModel in
+                resolvedPins.append(pinnedModel)
+                return pinnedModel.flatMap { LanguageModel.parse(from: $0) } ?? automaticModel
+            },
+            analyzer: { _, _, model in
+                analyzedModels.append(model)
+                analysisCount += 1
+                if analysisCount == 1 {
+                    automaticModel = .openai(.gpt55)
+                    throw TestModelResolutionError.providerPayload
+                }
+                return ScreenshotConversationAnalysis(
+                    provider: "minimax-cn",
+                    model: "MiniMax-M3",
+                    text: "重试成功")
+            })
+        defer { fixture.cleanup() }
+
+        let session = try fixture.service.createConversation(imageData: Data([1, 2, 3]))
+        await #expect(throws: TestModelResolutionError.providerPayload) {
+            try await fixture.service.analyze(sessionID: session.id)
+        }
+        #expect(fixture.sessionStore.session(id: session.id)?.modelName == "minimax-cn/MiniMax-M3")
+
+        try await fixture.service.analyze(sessionID: session.id)
+
+        #expect(resolvedPins == [nil, "minimax-cn/MiniMax-M3"])
+        #expect(analyzedModels == [.minimaxCN(.m3), .minimaxCN(.m3)])
+    }
+
+    @Test
+    func `Initial model resolution failure becomes a sanitized retryable status`() async throws {
+        var analyzerWasCalled = false
+        let fixture = self.makeFixture(
+            modelResolver: { _ in throw TestModelResolutionError.providerPayload },
+            analyzer: { _, _, _ in
+                analyzerWasCalled = true
+                return ScreenshotConversationAnalysis(provider: "unused", model: "unused", text: "unused")
+            })
+        defer { fixture.cleanup() }
+        let session = try fixture.service.createConversation(imageData: Data([1, 2, 3]))
+
+        await #expect(throws: TestModelResolutionError.providerPayload) {
+            try await fixture.service.analyze(sessionID: session.id)
+        }
+
+        #expect(!analyzerWasCalled)
+        #expect(fixture.service.status(for: session.id) == .failed("AI 模型不可用，请检查 Provider 配置后重试"))
+        if case let .failed(message) = fixture.service.status(for: session.id) {
+            #expect(!message.contains("provider-secret-payload"))
+        }
+    }
+
+    @Test
+    func `Follow-up model resolution failure keeps the appended user turn and sanitized status`() async throws {
+        var resolutionCount = 0
+        var analyzerCount = 0
+        let fixture = self.makeFixture(
+            modelResolver: { pinnedModel in
+                resolutionCount += 1
+                guard resolutionCount == 1 else {
+                    throw TestModelResolutionError.providerPayload
+                }
+                #expect(pinnedModel == nil)
+                return .minimaxCN(.m3)
+            },
+            analyzer: { _, _, _ in
+                analyzerCount += 1
+                return ScreenshotConversationAnalysis(
+                    provider: "minimax-cn",
+                    model: "MiniMax-M3",
+                    text: "初次答案")
+            })
+        defer { fixture.cleanup() }
+        let session = try fixture.service.createConversation(imageData: Data([1, 2, 3]))
+        try await fixture.service.analyze(sessionID: session.id)
+
+        await #expect(throws: TestModelResolutionError.providerPayload) {
+            try await fixture.service.sendFollowUp("继续追问", sessionID: session.id)
+        }
+
+        let stored = try #require(fixture.sessionStore.session(id: session.id))
+        #expect(Array(stored.messages.map(\.content).suffix(2)) == ["初次答案", "继续追问"])
+        #expect(analyzerCount == 1)
+        #expect(fixture.service.status(for: session.id) == .failed("AI 模型不可用，请检查 Provider 配置后重试"))
+    }
+
+    @Test
+    func `Cancelling without an active request preserves failed status`() async throws {
+        let fixture = self.makeFixture { _, _, _ in
+            throw TestModelResolutionError.providerPayload
+        }
+        defer { fixture.cleanup() }
+        let session = try fixture.service.createConversation(imageData: Data([1, 2, 3]))
+        _ = try? await fixture.service.analyze(sessionID: session.id)
+        let failedStatus = fixture.service.status(for: session.id)
+
+        fixture.service.cancel(sessionID: session.id)
+
+        #expect(fixture.service.status(for: session.id) == failedStatus)
+        #expect(failedStatus == .failed("AI 分析失败，请重试"))
     }
 
     @Test
@@ -121,7 +234,12 @@ struct ScreenshotConversationServiceTests {
             contextStore: ScreenshotConversationContextStore(rootDirectory: contextRoot),
             modelResolver: { pinnedModel in
                 restoredPins.append(pinnedModel)
-                return pinnedModel.flatMap { LanguageModel.parse(from: $0) }
+                guard let pinnedModel,
+                      let model = LanguageModel.parse(from: pinnedModel)
+                else {
+                    throw ScreenshotConversationServiceError.pinnedModelUnavailable
+                }
+                return model
             },
             analyzer: { imageData, _, model in
                 #expect(imageData == nil)
@@ -185,7 +303,7 @@ struct ScreenshotConversationServiceTests {
         _ = ScreenshotConversationService(
             sessionStore: sessionStore,
             contextStore: contextStore,
-            modelResolver: { _ in nil },
+            modelResolver: { _ in .openai(.gpt55) },
             analyzer: { _, _, _ in
                 ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
             })
@@ -212,7 +330,7 @@ struct ScreenshotConversationServiceTests {
         _ = ScreenshotConversationService(
             sessionStore: sessionStore,
             contextStore: contextStore,
-            modelResolver: { _ in nil },
+            modelResolver: { _ in .openai(.gpt55) },
             analyzer: { _, _, _ in
                 ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
             })
@@ -285,7 +403,7 @@ struct ScreenshotConversationServiceTests {
     }
 
     private func makeFixture(
-        modelResolver: @escaping ScreenshotConversationService.ModelResolver = { _ in nil },
+        modelResolver: @escaping ScreenshotConversationService.ModelResolver = { _ in .openai(.gpt55) },
         analyzer: @escaping ScreenshotConversationService.Analyzer) -> Fixture
     {
         let root = FileManager.default.temporaryDirectory
@@ -304,6 +422,14 @@ struct ScreenshotConversationServiceTests {
             sessionStore: sessionStore,
             contextStore: contextStore,
             service: service)
+    }
+
+    private enum TestModelResolutionError: Error, Equatable, LocalizedError {
+        case providerPayload
+
+        var errorDescription: String? {
+            "provider-secret-payload"
+        }
     }
 
     @MainActor

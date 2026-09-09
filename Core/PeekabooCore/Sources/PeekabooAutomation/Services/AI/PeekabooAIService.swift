@@ -455,7 +455,8 @@ public final class PeekabooAIService {
         Self.hasCredentialsOrLocalRuntime(for: model, configuration: self.configuration)
     }
 
-    private func resolveVisionModel(_ model: LanguageModel?) throws -> LanguageModel {
+    /// Resolve an explicit model or the currently configured automatic vision model.
+    public func resolveVisionModel(_ model: LanguageModel? = nil) throws -> LanguageModel {
         if let model {
             guard model.supportsVision else {
                 throw TachikomaError.unsupportedOperation("Model \(model.description) does not support vision")

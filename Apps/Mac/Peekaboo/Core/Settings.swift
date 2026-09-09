@@ -368,8 +368,10 @@ final class PeekabooSettings {
         return "\(provider)/\(model)"
     }
 
-    func resolvedVisionModel(using service: PeekabooAIService) throws -> LanguageModel? {
-        guard let selection = self.providerQualifiedVisionModel else { return nil }
+    func resolvedVisionModel(using service: PeekabooAIService) throws -> LanguageModel {
+        guard let selection = self.providerQualifiedVisionModel else {
+            return try service.resolveVisionModel()
+        }
         guard let model = service.resolveConfiguredModel(selection) else {
             throw VisionModelSelectionError.unavailableModel(selection)
         }

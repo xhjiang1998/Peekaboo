@@ -54,14 +54,16 @@ final class ScreenshotConversationService {
     typealias Analyzer = (
         _ imageData: Data?,
         _ turns: [PeekabooAIService.ConversationTurn],
-        _ model: LanguageModel?) async throws -> ScreenshotConversationAnalysis
-    typealias ModelResolver = (_ pinnedModelName: String?) throws -> LanguageModel?
+        _ model: LanguageModel) async throws -> ScreenshotConversationAnalysis
+    typealias ModelResolver = (_ pinnedModelName: String?) throws -> LanguageModel
 
     static let defaultPrompt = """
     请分析这张截图，提取关键信息并给出可直接使用的结论。
     如果截图包含题目、报错、文档或界面问题，请直接回答或解释；
     如果信息不足，请明确指出缺失信息。不要执行任何桌面操作。
     """
+
+    private static let modelResolutionFailureMessage = "AI 模型不可用，请检查 Provider 配置后重试"
 
     private let sessionStore: SessionStore
     private let contextStore: ScreenshotConversationContextStore
@@ -189,17 +191,26 @@ final class ScreenshotConversationService {
             imageData = nil
         }
 
-        let pinnedModelName = session.modelName.isEmpty ? nil : session.modelName
-        let selectedModel = try self.modelResolver(pinnedModelName)
-        if pinnedModelName == nil, let selectedModel {
-            self.sessionStore.updateModelName(
-                PeekabooAIService.modelIdentifier(for: selectedModel),
-                for: session)
-        }
-
         let requestID = UUID()
         self.activeRequestIDs[sessionID] = requestID
         self.statuses[sessionID] = .analyzing
+
+        let pinnedModelName = session.modelName.isEmpty ? nil : session.modelName
+        let selectedModel: LanguageModel
+        do {
+            selectedModel = try self.modelResolver(pinnedModelName)
+            if pinnedModelName == nil {
+                self.sessionStore.updateModelName(
+                    PeekabooAIService.modelIdentifier(for: selectedModel),
+                    for: session)
+            }
+        } catch {
+            guard self.activeRequestIDs[sessionID] == requestID else { return }
+            self.activeRequestIDs[sessionID] = nil
+            self.statuses[sessionID] = .failed(Self.modelResolutionFailureMessage)
+            throw error
+        }
+
         let requestTask = Task {
             try await self.analyzer(
                 imageData,
@@ -276,7 +287,6 @@ final class ScreenshotConversationService {
 
     func cancel(sessionID: String) {
         guard let task = self.activeRequestTasks[sessionID] else {
-            self.statuses[sessionID] = .idle
             return
         }
         self.activeRequestIDs[sessionID] = nil

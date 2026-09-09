@@ -111,6 +111,18 @@ struct PeekabooSettingsTests {
     }
 
     @Test
+    func `Automatic vision selection resolves a concrete provider qualified model`() throws {
+        try withIsolatedSettingsEnvironment { _, credentialCoordinator in
+            let settings = PeekabooSettings(credentialCoordinator: credentialCoordinator)
+            settings.useCustomVisionModel = false
+
+            let resolvedModel = try settings.resolvedVisionModel(using: PeekabooAIService())
+
+            #expect(PeekabooAIService.modelIdentifier(for: resolvedModel).contains("/"))
+        }
+    }
+
+    @Test
     func `Legacy model-only vision preference infers its provider`() throws {
         try withIsolatedSettingsEnvironment { _, credentialCoordinator in
             UserDefaults.standard.set(true, forKey: "peekaboo.useCustomVisionModel")
