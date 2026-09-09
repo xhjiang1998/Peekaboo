@@ -24,6 +24,11 @@ public struct AudioContent: Codable, Sendable {
 
 // MARK: - Conversation Session Models
 
+public enum ConversationSessionKind: String, Codable, Sendable {
+    case ordinary
+    case screenshot
+}
+
 /// Represents a conversation session with an AI agent
 public struct ConversationSession: Identifiable, Codable, Sendable {
     public let id: String
@@ -32,6 +37,12 @@ public struct ConversationSession: Identifiable, Codable, Sendable {
     public let startTime: Date
     public var summary: String
     public var modelName: String
+    /// `nil` is reserved for sessions decoded from persistence created before session kinds existed.
+    public var kind: ConversationSessionKind?
+
+    public var resolvedKind: ConversationSessionKind {
+        self.kind ?? .ordinary
+    }
 
     public init(
         id: String? = nil,
@@ -39,7 +50,8 @@ public struct ConversationSession: Identifiable, Codable, Sendable {
         messages: [ConversationMessage] = [],
         startTime: Date = Date(),
         summary: String = "",
-        modelName: String = "")
+        modelName: String = "",
+        kind: ConversationSessionKind? = .ordinary)
     {
         self.id = id ?? "session_\(UUID().uuidString)"
         self.title = title
@@ -47,6 +59,7 @@ public struct ConversationSession: Identifiable, Codable, Sendable {
         self.startTime = startTime
         self.summary = summary
         self.modelName = modelName
+        self.kind = kind
     }
 }
 

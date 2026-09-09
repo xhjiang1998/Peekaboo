@@ -53,12 +53,14 @@ final class SessionStore {
     func createSession(
         id: String? = nil,
         title: String = "",
-        modelName: String = "") -> ConversationSession
+        modelName: String = "",
+        kind: ConversationSessionKind = .ordinary) -> ConversationSession
     {
         let session = ConversationSession(
             id: id,
             title: title.isEmpty ? "New Session" : title,
-            modelName: modelName)
+            modelName: modelName,
+            kind: kind)
         self.sessions.insert(session, at: 0)
         self.currentSession = session
         Task { @MainActor in

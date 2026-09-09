@@ -123,7 +123,9 @@ struct SessionSidebar: View {
     }
 
     private func duplicateSession(_ session: ConversationSession) {
-        var newSession = ConversationSession(title: "\(session.title) (Copy)")
+        var newSession = ConversationSession(
+            title: "\(session.title) (Copy)",
+            kind: .ordinary)
         newSession.messages = session.messages
         newSession.summary = session.summary
 

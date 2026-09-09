@@ -23,6 +23,7 @@ struct ScreenshotConversationServiceTests {
         try await fixture.service.analyze(sessionID: session.id)
 
         #expect(UUID(uuidString: session.id) != nil)
+        #expect(session.kind == .screenshot)
         #expect(try fixture.contextStore.imageData(for: UUID(uuidString: session.id)!) == Data([1, 2, 3]))
         let stored = try #require(fixture.sessionStore.session(id: session.id))
         #expect(stored.messages.map(\.role) == [.user, .assistant])
@@ -352,6 +353,101 @@ struct ScreenshotConversationServiceTests {
 
         #expect(fixture.service.route(for: session.id) == .screenshotContextMissing)
         #expect(fixture.service.isScreenshotSession(session.id))
+    }
+
+    @Test
+    func `Ordinary session named screenshot analysis stays on ordinary route`() throws {
+        let fixture = self.makeFixture { _, _, _ in
+            ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+        }
+        defer { fixture.cleanup() }
+        let session = fixture.sessionStore.createSession(
+            id: UUID().uuidString.lowercased(),
+            title: "截图分析")
+
+        #expect(session.kind == .ordinary)
+        #expect(fixture.service.route(for: session.id) == .ordinary)
+        #expect(!fixture.service.isScreenshotSession(session.id))
+    }
+
+    @Test
+    func `Starting service migrates a legacy session with context to screenshot kind`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-screenshot-kind-context-migration-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        let sessionID = UUID()
+        sessionStore.sessions = [ConversationSession(
+            id: sessionID.uuidString.lowercased(),
+            title: "Any legacy title",
+            kind: nil)]
+        let contextStore = ScreenshotConversationContextStore(
+            rootDirectory: root.appendingPathComponent("contexts", isDirectory: true))
+        try contextStore.save(imageData: Data([4, 2]), for: sessionID)
+
+        let service = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            modelResolver: { _ in .openai(.gpt55) },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+            })
+
+        #expect(sessionStore.session(id: sessionID.uuidString.lowercased())?.kind == .screenshot)
+        #expect(service.route(for: sessionID.uuidString.lowercased()) == .screenshotAvailable)
+        let restoredStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        #expect(restoredStore.session(id: sessionID.uuidString.lowercased())?.kind == .screenshot)
+    }
+
+    @Test
+    func `Starting service migrates only strict legacy screenshot fingerprint without context`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-screenshot-kind-fingerprint-migration-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        let legacyID = UUID().uuidString.lowercased()
+        let sameTitleID = UUID().uuidString.lowercased()
+        let explicitOrdinaryID = UUID().uuidString.lowercased()
+        sessionStore.sessions = [
+            ConversationSession(
+                id: legacyID,
+                title: "截图分析",
+                messages: [
+                    ConversationMessage(role: .user, content: ScreenshotConversationService.defaultPrompt),
+                ],
+                kind: nil),
+            ConversationSession(
+                id: sameTitleID,
+                title: "截图分析",
+                messages: [ConversationMessage(role: .user, content: "普通问题")],
+                kind: nil),
+            ConversationSession(
+                id: explicitOrdinaryID,
+                title: "截图分析",
+                messages: [
+                    ConversationMessage(role: .user, content: ScreenshotConversationService.defaultPrompt),
+                ],
+                kind: .ordinary),
+        ]
+        let contextStore = ScreenshotConversationContextStore(
+            rootDirectory: root.appendingPathComponent("contexts", isDirectory: true))
+
+        let service = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            modelResolver: { _ in .openai(.gpt55) },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+            })
+
+        #expect(sessionStore.session(id: legacyID)?.kind == .screenshot)
+        #expect(service.route(for: legacyID) == .screenshotContextMissing)
+        #expect(sessionStore.session(id: sameTitleID)?.kind == .ordinary)
+        #expect(service.route(for: sameTitleID) == .ordinary)
+        #expect(sessionStore.session(id: explicitOrdinaryID)?.kind == .ordinary)
+        #expect(service.route(for: explicitOrdinaryID) == .ordinary)
     }
 
     @Test

@@ -84,6 +84,7 @@ final class ScreenshotConversationService {
         self.contextStore = contextStore
         self.modelResolver = modelResolver
         self.analyzer = analyzer
+        self.migrateLegacySessionKinds()
         self.cleanupStaleContexts()
     }
 
@@ -127,21 +128,24 @@ final class ScreenshotConversationService {
 
     func route(for sessionID: String) -> ScreenshotConversationRoute {
         guard let session = self.sessionStore.session(id: sessionID),
-              let id = UUID(uuidString: sessionID)
+              session.kind == .screenshot
         else {
             return .ordinary
         }
+        guard let id = UUID(uuidString: sessionID) else {
+            return .screenshotContextMissing
+        }
 
         do {
-            if try self.contextStore.context(for: id) != nil {
-                return try self.contextStore.hasImage(for: id)
-                    ? .screenshotAvailable
-                    : .screenshotContextMissing
+            guard try self.contextStore.context(for: id) != nil else {
+                return .screenshotContextMissing
             }
+            return try self.contextStore.hasImage(for: id)
+                ? .screenshotAvailable
+                : .screenshotContextMissing
         } catch {
-            return session.title == "截图分析" ? .screenshotContextMissing : .ordinary
+            return .screenshotContextMissing
         }
-        return session.title == "截图分析" ? .screenshotContextMissing : .ordinary
     }
 
     func imageData(for sessionID: String) throws -> Data? {
@@ -165,7 +169,8 @@ final class ScreenshotConversationService {
         try self.contextStore.save(imageData: imageData, for: id)
         let session = self.sessionStore.createSession(
             id: id.uuidString.lowercased(),
-            title: "截图分析")
+            title: "截图分析",
+            kind: .screenshot)
         self.sessionStore.addMessage(
             ConversationMessage(role: .user, content: normalizedPrompt),
             to: session)
@@ -325,6 +330,50 @@ final class ScreenshotConversationService {
         } catch {
             self.logger.error("Failed to clean orphaned screenshot contexts")
         }
+    }
+
+    private func migrateLegacySessionKinds() {
+        guard self.sessionStore.loadState != .failed else {
+            self.logger.error("Skipped screenshot session migration because session persistence could not be loaded")
+            return
+        }
+
+        var changed = false
+        for index in self.sessionStore.sessions.indices {
+            let session = self.sessionStore.sessions[index]
+            let sessionID = UUID(uuidString: session.id)
+            let hasContext: Bool
+            if let sessionID {
+                hasContext = (try? self.contextStore.context(for: sessionID)) != nil
+            } else {
+                hasContext = false
+            }
+
+            let migratedKind: ConversationSessionKind?
+            if hasContext {
+                migratedKind = .screenshot
+            } else if session.kind == nil {
+                migratedKind = Self.matchesLegacyScreenshotFingerprint(session)
+                    ? .screenshot
+                    : .ordinary
+            } else {
+                migratedKind = nil
+            }
+
+            guard let migratedKind, session.kind != migratedKind else { continue }
+            self.sessionStore.sessions[index].kind = migratedKind
+            changed = true
+        }
+
+        if changed {
+            self.sessionStore.saveSessions()
+        }
+    }
+
+    private static func matchesLegacyScreenshotFingerprint(_ session: ConversationSession) -> Bool {
+        UUID(uuidString: session.id) != nil &&
+            session.title == "截图分析" &&
+            session.messages.first(where: { $0.role == .user })?.content == Self.defaultPrompt
     }
 
     private static func turns(

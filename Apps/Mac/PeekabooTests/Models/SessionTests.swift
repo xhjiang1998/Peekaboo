@@ -15,6 +15,21 @@ struct ConversationSessionTests {
         #expect(session.messages.isEmpty)
         #expect(session.startTime <= Date())
         #expect(session.summary.isEmpty)
+        #expect(session.kind == .ordinary)
+    }
+
+    @Test
+    func `Legacy session JSON without kind decodes as ordinary`() throws {
+        let original = ConversationSession(title: "Legacy Session")
+        let encoded = try JSONEncoder().encode(original)
+        var json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        json.removeValue(forKey: "kind")
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try JSONDecoder().decode(ConversationSession.self, from: legacyData)
+
+        #expect(decoded.resolvedKind == .ordinary)
+        #expect(decoded.kind == nil)
     }
 
     @Test
@@ -78,6 +93,7 @@ struct ConversationSessionTests {
         #expect(decodedSession.messages[1].content == "Hi there!")
         #expect(decodedSession.messages[1].toolCalls.count == 1)
         #expect(decodedSession.summary == session.summary)
+        #expect(decodedSession.kind == .ordinary)
     }
 }
 
