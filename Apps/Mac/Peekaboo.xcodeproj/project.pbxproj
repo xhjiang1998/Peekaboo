@@ -11,6 +11,7 @@
 			782555022E1CA0ED00F1D8DF /* AXorcist in Frameworks */ = {isa = PBXBuildFile; productRef = 782555012E1CA0ED00F1D8DF /* AXorcist */; };
 			782555052E1CA10900F1D8DF /* PeekabooCore in Frameworks */ = {isa = PBXBuildFile; productRef = 782555042E1CA10900F1D8DF /* PeekabooCore */; };
 			78B1D0FA2F3A123400C0FFEE /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 78B1D0F92F3A123400C0FFEE /* AppIntents.framework */; };
+			78D4B0122F62000000A11CE0 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 78D4B0112F62000000A11CE0 /* Markdown */; };
 			78E542AD2E4178650006A8EF /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = 78E542AC2E4178650006A8EF /* KeyboardShortcuts */; };
 			78F8A0A12F0C0B3D00BEEF00 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 78F8A0A32F0C0B3D00BEEF00 /* Sparkle */; };
 			78EA3D102E3B92AB000ADFA6 /* PeekabooUICore in Frameworks */ = {isa = PBXBuildFile; productRef = 78EA3D0F2E3B92AB000ADFA6 /* PeekabooUICore */; };
@@ -51,6 +52,7 @@
 					782555022E1CA0ED00F1D8DF /* AXorcist in Frameworks */,
 					78B1D0FA2F3A123400C0FFEE /* AppIntents.framework in Frameworks */,
 					78E542AD2E4178650006A8EF /* KeyboardShortcuts in Frameworks */,
+					78D4B0122F62000000A11CE0 /* Markdown in Frameworks */,
 					78F8A0A12F0C0B3D00BEEF00 /* Sparkle in Frameworks */,
 					782555052E1CA10900F1D8DF /* PeekabooCore in Frameworks */,
 					78EA3D102E3B92AB000ADFA6 /* PeekabooUICore in Frameworks */,
@@ -110,6 +112,7 @@
 				782555042E1CA10900F1D8DF /* PeekabooCore */,
 				78EA3D0F2E3B92AB000ADFA6 /* PeekabooUICore */,
 				78E542AC2E4178650006A8EF /* KeyboardShortcuts */,
+				78D4B0112F62000000A11CE0 /* Markdown */,
 				78F8A0A32F0C0B3D00BEEF00 /* Sparkle */,
 				78F4CC982EE0457200ACDAAA /* PeekabooBridge */,
 			);
@@ -146,6 +149,7 @@
 				782555032E1CA10900F1D8DF /* XCLocalSwiftPackageReference "../../Core/PeekabooCore" */,
 				78EA3D0E2E3B92AB000ADFA6 /* XCLocalSwiftPackageReference "../../Core/PeekabooUICore" */,
 				78E542AB2E4178650006A8EF /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+				78D4B0102F62000000A11CE0 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				78F8A0A22F0C0B3D00BEEF00 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -428,6 +432,14 @@
 				minimumVersion = 3.0.1;
 			};
 		};
+		78D4B0102F62000000A11CE0 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-markdown";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.7.3;
+			};
+		};
 		78F8A0A22F0C0B3D00BEEF00 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
@@ -455,6 +467,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 78E542AB2E4178650006A8EF /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
 			productName = KeyboardShortcuts;
+		};
+		78D4B0112F62000000A11CE0 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 78D4B0102F62000000A11CE0 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
 		};
 		78F8A0A32F0C0B3D00BEEF00 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
