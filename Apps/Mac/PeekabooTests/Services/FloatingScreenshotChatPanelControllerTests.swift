@@ -104,16 +104,40 @@ struct FloatingScreenshotChatPanelControllerTests {
     }
 
     @Test
-    func presentationDoesNothingWhenDisplayCannotBeResolved() {
+    func unresolvedInitialDisplayUpdatesStateWithoutCreatingPanel() {
         let fixture = PanelControllerFixture(visibleFrames: [:])
-
-        fixture.controller.present(Self.context(
+        let context = Self.context(
             sessionID: "missing-display",
             selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
-            displayID: 999))
+            displayID: 999)
+
+        fixture.controller.present(context)
 
         #expect(fixture.createdPanels.isEmpty)
-        #expect(fixture.controller.state.currentContext == nil)
+        #expect(fixture.controller.state.currentContext == context)
+    }
+
+    @Test
+    func unresolvedNewDisplayReplacesStateAndHidesVisibleOldPanel() throws {
+        let fixture = PanelControllerFixture()
+        fixture.controller.present(Self.context(
+            sessionID: "valid-a",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: 7))
+        fixture.controller.state.togglePreview()
+        let unresolved = Self.context(
+            sessionID: "unresolved-b",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: 999)
+
+        fixture.controller.present(unresolved)
+
+        let panel = try #require(fixture.createdPanels.first)
+        #expect(fixture.controller.state.currentContext == unresolved)
+        #expect(fixture.controller.state.presentationGeneration == 2)
+        #expect(!fixture.controller.state.isPreviewExpanded)
+        #expect(!panel.isVisible)
+        #expect(panel.orderOutCallCount == 1)
     }
 
     private static func context(

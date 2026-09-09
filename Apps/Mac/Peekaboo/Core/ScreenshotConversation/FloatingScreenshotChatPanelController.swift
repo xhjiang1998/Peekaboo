@@ -37,7 +37,11 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
     }
 
     func present(_ context: ScreenshotPresentationContext) {
-        guard let visibleFrame = self.visibleFrameForDisplay(context.displayID) else { return }
+        self.state.present(context)
+        guard let visibleFrame = self.visibleFrameForDisplay(context.displayID) else {
+            self.panel?.orderOut(nil)
+            return
+        }
 
         let panelSize = CGSize(
             width: Self.panelWidth,
@@ -49,7 +53,6 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
                 panelSize: panelSize),
             size: panelSize)
 
-        self.state.present(context)
         if let panel = self.panel {
             panel.frame = panelFrame
         } else {
