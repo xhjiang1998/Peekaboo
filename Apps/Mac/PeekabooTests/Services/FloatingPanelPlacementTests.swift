@@ -36,6 +36,17 @@ struct FloatingPanelPlacementTests {
     }
 
     @Test
+    func `When neither side fits the side with more raw space is selected before clamping`() {
+        let visible = CGRect(x: 0, y: 0, width: 900, height: 900)
+        let origin = FloatingPanelPlacement.origin(
+            selectionRect: CGRect(x: 350, y: 300, width: 200, height: 100),
+            visibleFrame: visible,
+            panelSize: self.panel)
+
+        #expect(origin.x == 16)
+    }
+
+    @Test
     func `Negative display coordinates are preserved when placing the panel`() {
         let visible = CGRect(x: -1440, y: -20, width: 1440, height: 900)
         let origin = FloatingPanelPlacement.origin(

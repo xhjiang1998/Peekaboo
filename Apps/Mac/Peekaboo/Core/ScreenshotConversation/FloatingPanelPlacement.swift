@@ -11,15 +11,15 @@ enum FloatingPanelPlacement {
     {
         let rightX = selectionRect.maxX + Self.gap
         let leftX = selectionRect.minX - Self.gap - panelSize.width
-        let rightSpace = visibleFrame.maxX - Self.margin - rightX
-        let leftSpace = leftX - (visibleFrame.minX + Self.margin)
+        let rightSpace = visibleFrame.maxX - Self.margin - selectionRect.maxX - Self.gap
+        let leftSpace = selectionRect.minX - Self.gap - (visibleFrame.minX + Self.margin)
 
         let proposedX: CGFloat
         if rightX + panelSize.width <= visibleFrame.maxX - Self.margin {
             proposedX = rightX
         } else if leftX >= visibleFrame.minX + Self.margin {
             proposedX = leftX
-        } else if rightSpace >= leftSpace {
+        } else if rightSpace > leftSpace {
             proposedX = rightX
         } else {
             proposedX = leftX
