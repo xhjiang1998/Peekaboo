@@ -71,15 +71,37 @@ private extension MarkdownDisplayDocument {
 
     static func listItems(in list: some Markup) -> [[MarkdownDisplayInline]] {
         list.children.compactMap { $0 as? ListItem }.map { item in
-            let inline = item.children.flatMap { child -> [MarkdownDisplayInline] in
-                if let paragraph = child as? Paragraph {
-                    return self.inlineNodes(in: paragraph)
+            var inline = [MarkdownDisplayInline]()
+            for child in item.children {
+                if !inline.isEmpty {
+                    inline.append(.text("\n"))
                 }
 
-                return [.text(self.plainText(for: child))]
+                if let paragraph = child as? Paragraph {
+                    inline += self.inlineNodes(in: paragraph)
+                } else {
+                    inline.append(.text(self.listItemText(for: child)))
+                }
             }
             return inline.isEmpty ? [.text(self.plainText(for: item))] : inline
         }
+    }
+
+    static func listItemText(for markup: any Markup) -> String {
+        if let list = markup as? UnorderedList {
+            return self.listItems(in: list)
+                .map { "• \(self.plainText($0))" }
+                .joined(separator: "\n")
+        }
+
+        if let list = markup as? OrderedList {
+            return self.listItems(in: list)
+                .enumerated()
+                .map { "\(Int(list.startIndex) + $0.offset). \(self.plainText($0.element))" }
+                .joined(separator: "\n")
+        }
+
+        return self.plainText(for: markup)
     }
 
     static func inlineNodes(in markup: some Markup) -> [MarkdownDisplayInline] {

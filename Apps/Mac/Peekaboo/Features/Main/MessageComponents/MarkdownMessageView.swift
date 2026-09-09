@@ -24,18 +24,17 @@ private struct MarkdownDisplayBlockView: View {
     var body: some View {
         switch self.block {
         case let .paragraph(inline):
-            Text(self.attributedString(for: inline))
+            Text(MarkdownMessageRenderer.attributedString(for: inline, block: self.block))
                 .fixedSize(horizontal: false, vertical: true)
-        case let .heading(level, inline):
-            Text(self.attributedString(for: inline))
-                .font(self.headingFont(level: level))
+        case let .heading(_, inline):
+            Text(MarkdownMessageRenderer.attributedString(for: inline, block: self.block))
                 .fixedSize(horizontal: false, vertical: true)
         case let .unorderedList(items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("•")
-                        Text(self.attributedString(for: item))
+                        Text(MarkdownMessageRenderer.attributedString(for: item, block: self.block))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -46,7 +45,7 @@ private struct MarkdownDisplayBlockView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("\(start + offset).")
                             .monospacedDigit()
-                        Text(self.attributedString(for: item))
+                        Text(MarkdownMessageRenderer.attributedString(for: item, block: self.block))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -84,26 +83,53 @@ private struct MarkdownDisplayBlockView: View {
         }
     }
 
-    private func headingFont(level: Int) -> Font {
+}
+
+enum MarkdownMessageTextStyle: Equatable {
+    case body
+    case title2
+    case title3
+    case headline
+}
+
+enum MarkdownMessageRenderer {
+    static func textStyle(for block: MarkdownDisplayBlock) -> MarkdownMessageTextStyle {
+        guard case let .heading(level, _) = block else {
+            return .body
+        }
+
         switch level {
         case 1:
-            return .title2.weight(.bold)
+            return .title2
         case 2:
-            return .title3.weight(.bold)
+            return .title3
         default:
             return .headline
         }
     }
 
-    private func attributedString(for inline: [MarkdownDisplayInline]) -> AttributedString {
+    static func attributedString(for inline: [MarkdownDisplayInline], block: MarkdownDisplayBlock) -> AttributedString {
         var result = AttributedString()
         for node in inline {
-            self.append(node, to: &result, style: .init())
+            self.append(node, to: &result, style: .init(baseFont: self.font(for: block)))
         }
         return result
     }
 
-    private func append(
+    static func font(for block: MarkdownDisplayBlock) -> Font {
+        switch self.textStyle(for: block) {
+        case .body:
+            return .body
+        case .title2:
+            return .title2.weight(.bold)
+        case .title3:
+            return .title3.weight(.bold)
+        case .headline:
+            return .headline
+        }
+    }
+
+    private static func append(
         _ inline: MarkdownDisplayInline,
         to result: inout AttributedString,
         style: MarkdownInlineStyle)
@@ -113,6 +139,7 @@ private struct MarkdownDisplayBlockView: View {
             result += self.fragment(text, style: style)
         case let .strong(children):
             let style = MarkdownInlineStyle(
+                baseFont: style.baseFont,
                 isStrong: true,
                 isEmphasized: style.isEmphasized,
                 isCode: style.isCode,
@@ -122,6 +149,7 @@ private struct MarkdownDisplayBlockView: View {
             }
         case let .emphasis(children):
             let style = MarkdownInlineStyle(
+                baseFont: style.baseFont,
                 isStrong: style.isStrong,
                 isEmphasized: true,
                 isCode: style.isCode,
@@ -133,12 +161,14 @@ private struct MarkdownDisplayBlockView: View {
             result += self.fragment(
                 code,
                 style: MarkdownInlineStyle(
+                    baseFont: style.baseFont,
                     isStrong: style.isStrong,
                     isEmphasized: style.isEmphasized,
                     isCode: true,
                     link: style.link))
         case let .link(label, destination):
             let style = MarkdownInlineStyle(
+                baseFont: style.baseFont,
                 isStrong: style.isStrong,
                 isEmphasized: style.isEmphasized,
                 isCode: style.isCode,
@@ -149,10 +179,12 @@ private struct MarkdownDisplayBlockView: View {
         }
     }
 
-    private func fragment(_ text: String, style: MarkdownInlineStyle) -> AttributedString {
+    private static func fragment(_ text: String, style: MarkdownInlineStyle) -> AttributedString {
         var fragment = AttributedString(text)
-        var font = Font.system(.body, design: style.isCode ? .monospaced : .default)
-        font = font.weight(style.isStrong ? .bold : .regular)
+        var font = style.isCode ? style.baseFont.monospaced() : style.baseFont
+        if style.isStrong {
+            font = font.weight(.bold)
+        }
         if style.isEmphasized {
             font = font.italic()
         }
@@ -163,12 +195,20 @@ private struct MarkdownDisplayBlockView: View {
 }
 
 private struct MarkdownInlineStyle {
+    let baseFont: Font
     let isStrong: Bool
     let isEmphasized: Bool
     let isCode: Bool
     let link: URL?
 
-    init(isStrong: Bool = false, isEmphasized: Bool = false, isCode: Bool = false, link: URL? = nil) {
+    init(
+        baseFont: Font,
+        isStrong: Bool = false,
+        isEmphasized: Bool = false,
+        isCode: Bool = false,
+        link: URL? = nil)
+    {
+        self.baseFont = baseFont
         self.isStrong = isStrong
         self.isEmphasized = isEmphasized
         self.isCode = isCode

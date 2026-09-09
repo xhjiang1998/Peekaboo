@@ -60,4 +60,33 @@ struct MarkdownDisplayModelTests {
         #expect(!document.blocks.isEmpty)
         #expect(document.plainText.contains("保留这段文本"))
     }
+
+    @Test
+    func `keeps nested list items visibly separated`() {
+        let document = MarkdownDisplayDocument(source: """
+        - Parent
+          - Child
+        """)
+
+        #expect(document.blocks == [
+            .unorderedList([
+                [.text("Parent"), .text("\n"), .text("• Child")],
+            ]),
+        ])
+    }
+
+    @Test
+    func `separates multiple paragraphs in one list item`() {
+        let document = MarkdownDisplayDocument(source: """
+        - First paragraph
+
+          Second paragraph
+        """)
+
+        #expect(document.blocks == [
+            .unorderedList([
+                [.text("First paragraph"), .text("\n"), .text("Second paragraph")],
+            ]),
+        ])
+    }
 }
