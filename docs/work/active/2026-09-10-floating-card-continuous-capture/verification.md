@@ -28,6 +28,20 @@ resizing; nonactivating full-screen selection. Development build only, not a pub
 - Interactive acceptance: Option+Q inside a full-screen app; repeated capture in one open card;
   drag in both axes, resize, close/reopen boundaries and retry/skip behavior.
 
+## Remote and cross-review log
+
+- `b4ed67a`, run `34700380460`: Core conversation tests passed. Mac production compilation passed,
+  but test compilation failed on missing Foundation imports in two tests and an ambiguous
+  `greatestFiniteMagnitude` literal in a panel test. These were corrected, not counted as passing tests.
+- `134db6a`: added recovery barriers, exact text retry anchors, FIFO restart tests and cross-display
+  geometry corrections. Superseded by the following frozen snapshot.
+- `cec3268`, run `34701118982`: frozen validation snapshot. Follow-up independent review confirmed
+  all previously reported service and geometry findings closed, including pending geometry across
+  temporarily unavailable screens and late completion after cancellation/session deletion.
+  Core tests and production compilation passed. Mac test compilation exposed a missing inner `try`
+  in a new `#require` expression in the migration test; the minimal correction is included in the
+  next validation commit. No application artifact was installed from this failed run.
+
 ## Installation identity
 
 The currently installed `/Applications/Peekaboo.app` has an ad-hoc CDHash designated requirement.

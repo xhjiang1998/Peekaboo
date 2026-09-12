@@ -437,7 +437,7 @@ struct ScreenshotConversationQueueTests {
                 ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
             })
 
-        let migrated = try #require(contextStore.context(for: sessionID))
+        let migrated = try #require(try contextStore.context(for: sessionID))
         #expect(migrated.schemaVersion == 2)
         #expect(migrated.captures == [ScreenshotCapture(
             id: promptID,
