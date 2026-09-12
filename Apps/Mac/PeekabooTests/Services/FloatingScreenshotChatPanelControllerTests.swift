@@ -55,7 +55,7 @@ struct FloatingScreenshotChatPanelControllerTests {
         #expect(fixture.requestedDisplayIDs == [7, 8])
         #expect(panel.frame.origin == CGPoint(x: 428, y: 16))
         #expect(panel.frame.size == CGSize(width: 460, height: 600))
-        #expect(fixture.events == ["create", "front", "front"])
+        #expect(fixture.events == ["create", "front", "out", "front"])
     }
 
     @Test
@@ -110,6 +110,29 @@ struct FloatingScreenshotChatPanelControllerTests {
     }
 
     @Test
+    func anotherCaptureOnTheSameDisplayPreservesGeometryWhenItsVisibleFrameChanges() throws {
+        let fixture = PanelControllerFixture()
+        fixture.controller.present(Self.context(
+            sessionID: "same",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: 7))
+        let panel = try #require(fixture.createdPanels.first)
+        panel.frame = CGRect(x: 300, y: 180, width: 720, height: 500)
+        fixture.updateVisibleFrame(
+            CGRect(x: 0, y: 0, width: 1_200, height: 800),
+            for: 7)
+
+        fixture.controller.present(Self.context(
+            sessionID: "same",
+            selectionRect: CGRect(x: 40, y: 40, width: 200, height: 100),
+            displayID: 7,
+            isNewSession: false))
+
+        #expect(panel.frame == CGRect(x: 300, y: 180, width: 720, height: 500))
+        #expect(panel.orderOutCallCount == 0)
+    }
+
+    @Test
     func captureOnAnotherDisplayHidesThenRoutesTheExistingPanelAndPreservesSize() throws {
         let fixture = PanelControllerFixture(visibleFrames: [
             7: CGRect(x: 0, y: 0, width: 1440, height: 900),
@@ -133,6 +156,28 @@ struct FloatingScreenshotChatPanelControllerTests {
         #expect(panel.frame.minX >= -1424)
         #expect(panel.frame.maxX <= -16)
         #expect(fixture.events == ["create", "front", "out", "front"])
+    }
+
+    @Test
+    func newSessionIgnoresSavedOriginOnAnotherDisplayButPreservesSavedSize() throws {
+        let store = TestFloatingPanelGeometryStore(
+            frame: CGRect(x: 300, y: 180, width: 720, height: 500))
+        let fixture = PanelControllerFixture(
+            visibleFrames: [
+                7: CGRect(x: 0, y: 0, width: 1_440, height: 900),
+                8: CGRect(x: -1_440, y: 0, width: 1_440, height: 900),
+            ],
+            geometryStore: store)
+
+        fixture.controller.present(Self.context(
+            sessionID: "new-on-secondary",
+            selectionRect: CGRect(x: -1_300, y: 500, width: 200, height: 100),
+            displayID: 8))
+
+        let panel = try #require(fixture.createdPanels.first)
+        #expect(panel.frame.size == CGSize(width: 720, height: 500))
+        #expect(panel.frame.minX >= -1_424)
+        #expect(panel.frame.maxX <= -16)
     }
 
     @Test
@@ -176,6 +221,54 @@ struct FloatingScreenshotChatPanelControllerTests {
         #expect(store.savedFrames.isEmpty)
         scheduledActions[1]()
         #expect(store.savedFrames == [CGRect(x: 964, y: 50, width: 460, height: 600)])
+    }
+
+    @Test
+    func presentationFlushesPendingMoveBeforeInvalidatingItsDebounce() throws {
+        var scheduledActions: [@MainActor () -> Void] = []
+        let store = TestFloatingPanelGeometryStore()
+        let fixture = PanelControllerFixture(
+            geometryStore: store,
+            scheduleMovePersistence: { scheduledActions.append($0) })
+        fixture.controller.present(Self.context(
+            sessionID: "same",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: 7))
+        let panel = try #require(fixture.createdPanels.first)
+        panel.frame = CGRect(x: 300, y: 180, width: 720, height: 500)
+        panel.sendDidMove()
+
+        fixture.controller.present(Self.context(
+            sessionID: "same",
+            selectionRect: CGRect(x: 800, y: 500, width: 200, height: 100),
+            displayID: 7,
+            isNewSession: false))
+
+        #expect(store.savedFrames == [panel.frame])
+        scheduledActions.forEach { $0() }
+        #expect(store.savedFrames == [panel.frame])
+    }
+
+    @Test
+    func dismissalFlushesPendingMoveBeforeInvalidatingItsDebounce() throws {
+        var scheduledActions: [@MainActor () -> Void] = []
+        let store = TestFloatingPanelGeometryStore()
+        let fixture = PanelControllerFixture(
+            geometryStore: store,
+            scheduleMovePersistence: { scheduledActions.append($0) })
+        fixture.controller.present(Self.context(
+            sessionID: "dismiss-after-move",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: 7))
+        let panel = try #require(fixture.createdPanels.first)
+        panel.frame = CGRect(x: 300, y: 180, width: 720, height: 500)
+        panel.sendDidMove()
+
+        fixture.controller.dismiss()
+
+        #expect(store.savedFrames == [panel.frame])
+        scheduledActions.forEach { $0() }
+        #expect(store.savedFrames == [panel.frame])
     }
 
     @Test
@@ -407,17 +500,17 @@ struct FloatingScreenshotChatPanelControllerTests {
 
 @MainActor
 private final class PanelControllerFixture {
-    private let visibleFrames: [CGDirectDisplayID: CGRect]
+    private let visibleFrames: TestVisibleFrames
     private(set) var createdPanels: [TestFloatingPanel] = []
     private(set) var requestedDisplayIDs: [CGDirectDisplayID] = []
     private(set) var events: [String] = []
     private(set) lazy var controller = FloatingScreenshotChatPanelController(
         visibleFrameForDisplay: { [weak self] displayID in
             self?.requestedDisplayIDs.append(displayID)
-            return self?.visibleFrames[displayID]
+            return self?.visibleFrames.values[displayID]
         },
         screenFrames: self.screenFrames,
-        mainVisibleFrame: { [weak self] in self?.visibleFrames[7] },
+        mainVisibleFrame: { [weak self] in self?.visibleFrames.values[7] },
         geometryStore: self.geometryStore,
         scheduleMovePersistence: self.scheduleMovePersistence,
         panelFactory: { [weak self] frame, onEscape in
@@ -446,10 +539,24 @@ private final class PanelControllerFixture {
             action in action()
         })
     {
+        let visibleFrames = TestVisibleFrames(visibleFrames)
         self.visibleFrames = visibleFrames
-        self.screenFrames = screenFrames ?? { Array(visibleFrames.values) }
+        self.screenFrames = screenFrames ?? { Array(visibleFrames.values.values) }
         self.geometryStore = geometryStore
         self.scheduleMovePersistence = scheduleMovePersistence
+    }
+
+    func updateVisibleFrame(_ frame: CGRect, for displayID: CGDirectDisplayID) {
+        self.visibleFrames.values[displayID] = frame
+    }
+}
+
+@MainActor
+private final class TestVisibleFrames {
+    var values: [CGDirectDisplayID: CGRect]
+
+    init(_ values: [CGDirectDisplayID: CGRect]) {
+        self.values = values
     }
 }
 
@@ -457,7 +564,9 @@ private final class PanelControllerFixture {
 private final class TestFloatingPanel: FloatingPanelControlling {
     var frame: CGRect
     var minSize = CGSize.zero
-    var maxSize = CGSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+    var maxSize = CGSize(
+        width: CGFloat.greatestFiniteMagnitude,
+        height: CGFloat.greatestFiniteMagnitude)
     var geometryEvents: FloatingPanelGeometryEvents?
     private(set) var isVisible = false
     private(set) var orderFrontRegardlessCallCount = 0

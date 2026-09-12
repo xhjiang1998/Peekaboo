@@ -66,6 +66,11 @@ enum ScreenshotConversationServiceError: Error, Equatable, LocalizedError {
 @Observable
 @MainActor
 final class ScreenshotConversationService {
+    private struct FailedTextRequest {
+        let promptID: UUID
+        let assistantMessageID: UUID
+    }
+
     typealias Analyzer = (
         _ imageData: Data?,
         _ turns: [PeekabooAIService.ConversationTurn],
@@ -97,6 +102,7 @@ final class ScreenshotConversationService {
     private var captureQueues: [String: [UUID]] = [:]
     private var queuedCaptureIDs: [String: Set<UUID>] = [:]
     private var drainTasks: [String: Task<Void, Never>] = [:]
+    private var failedTextRequests: [String: FailedTextRequest] = [:]
     private var captureRevision = 0
 
     init(
@@ -167,10 +173,23 @@ final class ScreenshotConversationService {
     }
 
     func isBusy(sessionID: String) -> Bool {
-        self.activeRequestTasks[sessionID] != nil || self.isCaptureQueueBusy(sessionID: sessionID)
+        self.activeRequestTasks[sessionID] != nil ||
+            self.failedTextRequests[sessionID] != nil ||
+            self.isCaptureQueueBusy(sessionID: sessionID)
     }
 
     func retryAnalysis(sessionID: String) async throws {
+        if let failedTextRequest = self.failedTextRequests[sessionID] {
+            guard self.activeRequestTasks[sessionID] == nil,
+                  self.drainTasks[sessionID] == nil
+            else {
+                throw ScreenshotConversationServiceError.requestAlreadyInProgress
+            }
+            try await self.analyzeTextTurn(
+                sessionID: sessionID,
+                retrying: failedTextRequest)
+            return
+        }
         try await self.analyze(sessionID: sessionID)
     }
 
@@ -333,6 +352,12 @@ final class ScreenshotConversationService {
         guard let session = self.sessionStore.session(id: sessionID) else {
             throw ScreenshotConversationServiceError.sessionNotFound
         }
+        if let failedTextRequest = self.failedTextRequests[sessionID] {
+            try await self.analyzeTextTurn(
+                sessionID: sessionID,
+                retrying: failedTextRequest)
+            return
+        }
         if let capture = try self.nextRetryableCapture(sessionID: sessionID) {
             if capture.analysisState == .failed {
                 guard let sessionUUID = UUID(uuidString: sessionID) else {
@@ -345,6 +370,8 @@ final class ScreenshotConversationService {
             } catch is CancellationError {
                 return
             }
+            self.removeQueuedCapture(capture.id, sessionID: sessionID)
+            self.startDrainIfNeeded(sessionID: sessionID)
             return
         }
 
@@ -358,6 +385,7 @@ final class ScreenshotConversationService {
             throw ScreenshotConversationServiceError.emptyMessage
         }
         guard self.activeRequestTasks[sessionID] == nil,
+              self.failedTextRequests[sessionID] == nil,
               !self.isCaptureQueueBusy(sessionID: sessionID)
         else {
             throw ScreenshotConversationServiceError.requestAlreadyInProgress
@@ -390,8 +418,9 @@ final class ScreenshotConversationService {
     func retryCapture(sessionID: String, captureID: UUID) {
         guard let sessionUUID = UUID(uuidString: sessionID),
               let context = try? self.contextStore.context(for: sessionUUID),
-              let capture = context.captures.first(where: { $0.id == captureID }),
-              capture.analysisState == .failed
+              let captureIndex = context.captures.firstIndex(where: { $0.id == captureID }),
+              context.captures[captureIndex].analysisState == .failed,
+              !Self.hasUnresolvedCapture(before: captureIndex, in: context)
         else {
             return
         }
@@ -445,6 +474,7 @@ final class ScreenshotConversationService {
         self.activeRequestTasks[sessionID]?.cancel()
         self.activeRequestTasks[sessionID] = nil
         self.activeRequestIDs[sessionID] = nil
+        self.failedTextRequests[sessionID] = nil
         try self.contextStore.removeContext(for: id)
         self.statuses.removeValue(forKey: sessionID)
         self.sessionStore.sessions.removeAll { $0.id == sessionID }
@@ -516,16 +546,46 @@ final class ScreenshotConversationService {
     }
 
     private func isCaptureQueueBusy(sessionID: String) -> Bool {
-        !(self.captureQueues[sessionID]?.isEmpty ?? true) || self.drainTasks[sessionID] != nil
+        if !(self.captureQueues[sessionID]?.isEmpty ?? true) || self.drainTasks[sessionID] != nil {
+            return true
+        }
+        guard let sessionUUID = UUID(uuidString: sessionID),
+              let context = try? self.contextStore.context(for: sessionUUID)
+        else {
+            return false
+        }
+        return context.captures.contains { capture in
+            switch capture.analysisState {
+            case .pending, .analyzing, .failed:
+                return true
+            case .ready, .skipped:
+                return false
+            }
+        }
     }
 
     private func startDrainIfNeeded(sessionID: String) {
         guard self.drainTasks[sessionID] == nil,
               self.activeRequestTasks[sessionID] == nil,
+              self.failedTextRequests[sessionID] == nil,
               let captureID = self.captureQueues[sessionID]?.first,
-              let sessionUUID = UUID(uuidString: sessionID),
-              let context = try? self.contextStore.context(for: sessionUUID),
-              context.captures.first(where: { $0.id == captureID })?.analysisState != .failed
+              let sessionUUID = UUID(uuidString: sessionID)
+        else {
+            return
+        }
+        let context: ScreenshotConversationContext
+        do {
+            guard let storedContext = try self.contextStore.context(for: sessionUUID) else {
+                return
+            }
+            context = storedContext
+        } catch {
+            self.statuses[sessionID] = .failed("无法读取截图状态，请检查文件权限后重试")
+            return
+        }
+        guard let captureIndex = context.captures.firstIndex(where: { $0.id == captureID }),
+              context.captures[captureIndex].analysisState != .failed,
+              !Self.hasUnresolvedCapture(before: captureIndex, in: context)
         else {
             return
         }
@@ -540,10 +600,22 @@ final class ScreenshotConversationService {
             self.drainTasks[sessionID] = nil
         }
         while !Task.isCancelled, let captureID = self.captureQueues[sessionID]?.first {
-            guard let sessionUUID = UUID(uuidString: sessionID),
-                  let context = try? self.contextStore.context(for: sessionUUID),
-                  let capture = context.captures.first(where: { $0.id == captureID })
-            else {
+            guard let sessionUUID = UUID(uuidString: sessionID) else {
+                self.removeQueuedCapture(captureID, sessionID: sessionID)
+                continue
+            }
+            let context: ScreenshotConversationContext
+            do {
+                guard let storedContext = try self.contextStore.context(for: sessionUUID) else {
+                    self.removeQueuedCapture(captureID, sessionID: sessionID)
+                    continue
+                }
+                context = storedContext
+            } catch {
+                self.statuses[sessionID] = .failed("无法读取截图状态，请检查文件权限后重试")
+                return
+            }
+            guard let capture = context.captures.first(where: { $0.id == captureID }) else {
                 self.removeQueuedCapture(captureID, sessionID: sessionID)
                 continue
             }
@@ -585,13 +657,31 @@ final class ScreenshotConversationService {
         else {
             throw ScreenshotConversationServiceError.imageContextMissing
         }
-        guard let imageData = try self.contextStore.imageData(for: sessionUUID, captureID: captureID) else {
+        let imageData: Data
+        do {
+            guard let storedImageData = try self.contextStore.imageData(
+                for: sessionUUID,
+                captureID: captureID)
+            else {
+                throw ScreenshotConversationServiceError.imageContextMissing
+            }
+            imageData = storedImageData
+        } catch {
+            guard self.sessionStore.session(id: sessionID) != nil else {
+                self.statuses[sessionID] = nil
+                throw CancellationError()
+            }
             try? self.setCaptureState(.failed, captureID: captureID, sessionID: sessionUUID)
             self.statuses[sessionID] = .failed("原截图已丢失，请重新截图")
-            throw ScreenshotConversationServiceError.imageContextMissing
+            throw error
         }
 
-        try self.setCaptureState(.analyzing, captureID: captureID, sessionID: sessionUUID)
+        do {
+            try self.setCaptureState(.analyzing, captureID: captureID, sessionID: sessionUUID)
+        } catch {
+            self.statuses[sessionID] = .failed("无法保存分析状态，请检查磁盘空间后重试")
+            throw error
+        }
         self.statuses[sessionID] = .analyzing
         let selectedModel: LanguageModel
         do {
@@ -622,8 +712,16 @@ final class ScreenshotConversationService {
         } catch {
             self.clearActiveRequest(sessionID: sessionID, requestID: requestID)
             if requestTask.isCancelled || error is CancellationError {
-                try? self.setCaptureState(.pending, captureID: captureID, sessionID: sessionUUID)
-                self.statuses[sessionID] = .idle
+                guard self.sessionStore.session(id: sessionID) != nil else {
+                    self.statuses[sessionID] = nil
+                    throw CancellationError()
+                }
+                try? self.setCaptureState(.failed, captureID: captureID, sessionID: sessionUUID)
+                self.statuses[sessionID] = .failed("AI 分析已取消，可重试或跳过")
+                throw CancellationError()
+            }
+            guard self.sessionStore.session(id: sessionID) != nil else {
+                self.statuses[sessionID] = nil
                 throw CancellationError()
             }
             try? self.setCaptureState(.failed, captureID: captureID, sessionID: sessionUUID)
@@ -633,8 +731,12 @@ final class ScreenshotConversationService {
 
         guard self.activeRequestIDs[sessionID] == requestID, !requestTask.isCancelled else {
             self.clearActiveRequest(sessionID: sessionID, requestID: requestID)
-            try? self.setCaptureState(.pending, captureID: captureID, sessionID: sessionUUID)
-            self.statuses[sessionID] = .idle
+            guard self.sessionStore.session(id: sessionID) != nil else {
+                self.statuses[sessionID] = nil
+                throw CancellationError()
+            }
+            try? self.setCaptureState(.failed, captureID: captureID, sessionID: sessionUUID)
+            self.statuses[sessionID] = .failed("AI 分析已取消，可重试或跳过")
             throw CancellationError()
         }
         self.clearActiveRequest(sessionID: sessionID, requestID: requestID)
@@ -657,23 +759,46 @@ final class ScreenshotConversationService {
         self.statuses[sessionID] = .ready
     }
 
-    private func analyzeTextTurn(sessionID: String) async throws {
-        guard let session = self.sessionStore.session(id: sessionID),
-              let prompt = session.messages.last,
-              prompt.role == .user
-        else {
+    private func analyzeTextTurn(
+        sessionID: String,
+        retrying failedRequest: FailedTextRequest? = nil) async throws
+    {
+        guard let session = self.sessionStore.session(id: sessionID) else {
             throw ScreenshotConversationServiceError.sessionNotFound
         }
-        let assistantMessageID = UUID()
+        let promptIndex: Int
+        if let failedRequest {
+            guard let failedPromptIndex = session.messages.firstIndex(where: {
+                $0.id == failedRequest.promptID
+            }) else {
+                throw ScreenshotConversationServiceError.sessionNotFound
+            }
+            promptIndex = failedPromptIndex
+        } else {
+            guard let lastIndex = session.messages.indices.last else {
+                throw ScreenshotConversationServiceError.sessionNotFound
+            }
+            promptIndex = lastIndex
+        }
+        let prompt = session.messages[promptIndex]
+        guard prompt.role == .user else {
+            throw ScreenshotConversationServiceError.sessionNotFound
+        }
+        let assistantMessageID = failedRequest?.assistantMessageID ?? UUID()
         let selectedModel: LanguageModel
         do {
             selectedModel = try self.resolveAndPinModel(for: session)
         } catch {
+            self.failedTextRequests[sessionID] = FailedTextRequest(
+                promptID: prompt.id,
+                assistantMessageID: assistantMessageID)
             self.statuses[sessionID] = .failed(Self.modelResolutionFailureMessage)
             throw error
         }
         let skippedIDs = self.skippedCaptureIDs(sessionID: sessionID)
-        let turns = Self.turns(from: session.messages, excludingUserMessageIDs: skippedIDs)
+        let turns = Self.turns(
+            from: Array(session.messages[...promptIndex]),
+            excludingUserMessageIDs: skippedIDs)
         let requestID = UUID()
         self.activeRequestIDs[sessionID] = requestID
         self.statuses[sessionID] = .analyzing
@@ -681,6 +806,7 @@ final class ScreenshotConversationService {
             try await self.analyzer(nil, turns, selectedModel)
         }
         self.activeRequestTasks[sessionID] = requestTask
+        var answerWasGenerated = false
         do {
             let result = try await requestTask.value
             guard self.activeRequestIDs[sessionID] == requestID, !requestTask.isCancelled else {
@@ -697,7 +823,9 @@ final class ScreenshotConversationService {
                     content: result.text),
                 after: prompt.id,
                 in: sessionID)
+            answerWasGenerated = true
             try self.sessionStore.persistSessionsNow()
+            self.failedTextRequests[sessionID] = nil
             self.statuses[sessionID] = .ready
             self.startDrainIfNeeded(sessionID: sessionID)
         } catch {
@@ -707,8 +835,12 @@ final class ScreenshotConversationService {
                 self.startDrainIfNeeded(sessionID: sessionID)
                 throw CancellationError()
             }
-            self.statuses[sessionID] = .failed("AI 分析失败，请重试")
-            self.startDrainIfNeeded(sessionID: sessionID)
+            self.failedTextRequests[sessionID] = FailedTextRequest(
+                promptID: prompt.id,
+                assistantMessageID: assistantMessageID)
+            self.statuses[sessionID] = answerWasGenerated
+                ? .failed("无法保存 AI 回答，请检查磁盘空间后重试")
+                : .failed("AI 分析失败，请重试")
             throw error
         }
     }
@@ -895,6 +1027,20 @@ final class ScreenshotConversationService {
         UUID(uuidString: session.id) != nil &&
             session.title == "截图分析" &&
             session.messages.first(where: { $0.role == .user })?.content == Self.defaultPrompt
+    }
+
+    private static func hasUnresolvedCapture(
+        before captureIndex: Int,
+        in context: ScreenshotConversationContext) -> Bool
+    {
+        context.captures[..<captureIndex].contains { capture in
+            switch capture.analysisState {
+            case .pending, .analyzing, .failed:
+                return true
+            case .ready, .skipped:
+                return false
+            }
+        }
     }
 
     private static func turns(

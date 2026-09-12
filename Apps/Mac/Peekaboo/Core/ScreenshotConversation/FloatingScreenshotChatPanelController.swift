@@ -26,6 +26,7 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
     private var presentedDisplayID: CGDirectDisplayID?
     private var presentedVisibleFrame: CGRect?
     private var movePersistenceGeneration = 0
+    private var hasPendingMovePersistence = false
     private var isApplyingFrame = false
 
     init(
@@ -67,21 +68,26 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
     }
 
     func present(_ context: ScreenshotPresentationContext) {
+        self.flushPendingMovePersistence()
         self.movePersistenceGeneration += 1
         let previousContext = self.state.currentContext
         self.state.present(context)
-        guard let visibleFrame = self.targetVisibleFrame(for: context) else {
+        guard let target = self.presentationTarget(for: context) else {
             self.panel?.orderFrontRegardless()
             return
         }
+        let visibleFrame = target.visibleFrame
 
         let existingPanel = self.panel
+        let isSameDisplay = self.isSamePresentedDisplay(
+            as: target.displayID,
+            visibleFrame: visibleFrame)
         let preservesGeometry = !context.isNewSession &&
             previousContext?.sessionID == context.sessionID &&
-            self.presentedVisibleFrame == visibleFrame
+            isSameDisplay
         let routesToAnotherDisplay = existingPanel != nil &&
             self.presentedVisibleFrame != nil &&
-            self.presentedVisibleFrame != visibleFrame
+            !isSameDisplay
         let panelFrame = self.frameForPresentation(
             context,
             visibleFrame: visibleFrame,
@@ -99,13 +105,14 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
             }
             self.installGeometryEvents()
         }
-        self.presentedDisplayID = context.displayID
+        self.presentedDisplayID = target.displayID
         self.presentedVisibleFrame = visibleFrame
         self.updateSizeConstraints(fallbackScreen: visibleFrame)
         self.panel?.orderFrontRegardless()
     }
 
     func dismiss() {
+        self.flushPendingMovePersistence()
         self.movePersistenceGeneration += 1
         self.state.markDismissed()
         self.panel?.orderOut(nil)
@@ -140,23 +147,28 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
            let existingFrame,
            let normalized = FloatingPanelGeometry.normalizedFrame(
                existingFrame,
-               screens: screens.isEmpty ? [visibleFrame] : screens,
+               screens: [visibleFrame],
                fallbackScreen: visibleFrame)
         {
             return normalized
         }
 
-        if context.isNewSession,
-           let savedFrame = self.geometryStore.loadFrame(),
+        let savedFrame = context.isNewSession ? self.geometryStore.loadFrame() : nil
+        let candidateScreens = screens.isEmpty ? [visibleFrame] : screens
+        if let savedFrame,
+           FloatingPanelGeometry.targetScreen(
+               for: savedFrame,
+               screens: candidateScreens,
+               fallbackScreen: visibleFrame) == visibleFrame,
            let normalized = FloatingPanelGeometry.normalizedFrame(
                savedFrame,
-               screens: screens.isEmpty ? [visibleFrame] : screens,
+               screens: [visibleFrame],
                fallbackScreen: visibleFrame)
         {
             return normalized
         }
 
-        let proposedSize = existingFrame?.size ?? FloatingPanelGeometry.defaultSize
+        let proposedSize = savedFrame?.size ?? existingFrame?.size ?? FloatingPanelGeometry.defaultSize
         let maximumSize = FloatingPanelGeometry.maximumSize(for: visibleFrame)
         let panelSize = CGSize(
             width: min(proposedSize.width, maximumSize.width),
@@ -184,15 +196,18 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
 
     private func panelDidMove() {
         guard !self.isApplyingFrame else { return }
+        self.hasPendingMovePersistence = true
         self.movePersistenceGeneration += 1
         let generation = self.movePersistenceGeneration
         self.scheduleMovePersistence { [weak self] in
             guard let self, generation == self.movePersistenceGeneration else { return }
+            self.hasPendingMovePersistence = false
             self.normalizeAndPersistFrame()
         }
     }
 
     private func panelDidChangeScreen() {
+        self.hasPendingMovePersistence = false
         self.movePersistenceGeneration += 1
         guard !self.screenFrames().isEmpty else { return }
         self.updateSizeConstraints(fallbackScreen: self.currentFallbackScreen())
@@ -200,6 +215,7 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
     }
 
     private func panelDidEndLiveResize() {
+        self.hasPendingMovePersistence = false
         self.movePersistenceGeneration += 1
         self.normalizeAndPersistFrame()
     }
@@ -217,6 +233,7 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
 
     private func resetToDefaultSize() {
         guard let panel = self.panel else { return }
+        self.hasPendingMovePersistence = false
         self.movePersistenceGeneration += 1
         let proposed = CGRect(origin: panel.frame.origin, size: FloatingPanelGeometry.defaultSize)
         self.normalizeAndPersistFrame(proposedFrame: proposed)
@@ -272,20 +289,38 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
         return self.presentedVisibleFrame ?? self.mainVisibleFrame()
     }
 
-    private func targetVisibleFrame(for context: ScreenshotPresentationContext) -> CGRect? {
+    private func presentationTarget(
+        for context: ScreenshotPresentationContext) -> (visibleFrame: CGRect, displayID: CGDirectDisplayID?)?
+    {
         if let displayID = context.displayID,
            let visibleFrame = self.visibleFrameForDisplay(displayID)
         {
-            return visibleFrame
+            return (visibleFrame, displayID)
         }
         let screens = self.screenFrames()
         if screens.isEmpty {
-            return self.mainVisibleFrame()
+            return self.mainVisibleFrame().map { ($0, nil) }
         }
         return FloatingPanelGeometry.targetScreen(
             for: context.selectionRect,
             screens: screens,
-            fallbackScreen: self.mainVisibleFrame())
+            fallbackScreen: self.mainVisibleFrame()).map { ($0, nil) }
+    }
+
+    private func isSamePresentedDisplay(
+        as displayID: CGDirectDisplayID?,
+        visibleFrame: CGRect) -> Bool
+    {
+        if let presentedDisplayID, let displayID {
+            return presentedDisplayID == displayID
+        }
+        return self.presentedVisibleFrame == visibleFrame
+    }
+
+    private func flushPendingMovePersistence() {
+        guard self.hasPendingMovePersistence else { return }
+        self.hasPendingMovePersistence = false
+        self.normalizeAndPersistFrame()
     }
 
     private func applyFrame(_ frame: CGRect, to panel: any FloatingPanelControlling) {

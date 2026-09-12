@@ -269,7 +269,8 @@ struct ScreenshotConversationServiceTests {
 
         let stored = try #require(fixture.sessionStore.session(id: session.id))
         #expect(stored.messages.map(\.role) == [.user])
-        #expect(fixture.service.status(for: session.id) == .idle)
+        #expect(fixture.service.status(for: session.id) == .failed("AI 分析已取消，可重试或跳过"))
+        #expect(fixture.service.captures(sessionID: session.id).map(\.analysisState) == [.failed])
     }
 
     @Test
@@ -475,7 +476,8 @@ struct ScreenshotConversationServiceTests {
         try await analysis.value
         #expect(analyzerObservedCancellation)
         #expect(fixture.sessionStore.session(id: session.id)?.messages.map(\.role) == [.user])
-        #expect(fixture.service.status(for: session.id) == .idle)
+        #expect(fixture.service.status(for: session.id) == .failed("AI 分析已取消，可重试或跳过"))
+        #expect(fixture.service.captures(sessionID: session.id).map(\.analysisState) == [.failed])
     }
 
     @Test
@@ -501,7 +503,8 @@ struct ScreenshotConversationServiceTests {
         _ = try? await firstRequest.value
         let stored = try #require(fixture.sessionStore.session(id: session.id))
         #expect(stored.messages.map(\.role) == [.user])
-        #expect(fixture.service.status(for: session.id) == .idle)
+        #expect(fixture.service.status(for: session.id) == .failed("AI 分析已取消，可重试或跳过"))
+        #expect(fixture.service.captures(sessionID: session.id).map(\.analysisState) == [.failed])
     }
 
     private func makeFixture(

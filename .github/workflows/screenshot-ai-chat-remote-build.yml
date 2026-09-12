@@ -25,17 +25,6 @@ jobs:
           submodules: recursive
           fetch-depth: 2
 
-      - name: Detect Core changes
-        id: changes
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "core=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet HEAD^ HEAD -- Core/PeekabooCore Core/PeekabooAutomationKit Tachikoma; then
-            echo "core=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "core=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Select Xcode 26
         run: |
           set -euo pipefail
@@ -56,10 +45,11 @@ jobs:
           path: |
             Apps/Mac/.build
             Core/PeekabooCore/.build
-          key: ${{ runner.os }}-${{ runner.arch }}-xcode26-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-xcode26-coverage-v1-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-xcode26-spm-${{ hashFiles('**/Package.resolved') }}
 
       - name: Run screenshot AI conversation tests
-        if: steps.changes.outputs.core == 'true'
         working-directory: Core/PeekabooCore
         env:
           PEEKABOO_CONFIG_DIR: ${{ runner.temp }}/peekaboo-core-tests

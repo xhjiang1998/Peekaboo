@@ -32,6 +32,22 @@ struct ScreenshotConversationQueueTests {
     }
 
     @Test
+    func invalidReusableSessionFallsBackToANewScreenshotSession() throws {
+        let fixture = self.makeFixture { _, _, _, _ in
+            ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+        }
+        defer { fixture.cleanup() }
+
+        let submission = try fixture.service.submitScreenshot(
+            imageData: Data([1]),
+            reusing: "missing-session")
+
+        #expect(submission.isNewSession)
+        #expect(submission.sessionID != "missing-session")
+        #expect(fixture.sessionStore.session(id: submission.sessionID)?.kind == .screenshot)
+    }
+
+    @Test
     func submissionPersistenceFailureRollsBackSessionAndImageContext() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("peekaboo-submit-rollback-tests", isDirectory: true)
@@ -163,6 +179,41 @@ struct ScreenshotConversationQueueTests {
     }
 
     @Test
+    func screenshotSubmittedAfterFailureCannotPassTheFailedQueueHead() async throws {
+        var requestCount = 0
+        let fixture = self.makeFixture { _, _, _, _ in
+            requestCount += 1
+            if requestCount == 1 {
+                throw QueueFailure.provider
+            }
+            return ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "done")
+        }
+        defer { fixture.cleanup() }
+
+        let first = try fixture.service.submitScreenshot(imageData: Data([1]), reusing: nil)
+        fixture.service.enqueueAnalysis(first)
+        #expect(await self.waitUntil {
+            fixture.service.captures(sessionID: first.sessionID).first?.analysisState == .failed
+        })
+
+        let second = try fixture.service.submitScreenshot(imageData: Data([2]), reusing: first.sessionID)
+        fixture.service.enqueueAnalysis(second)
+        for _ in 0..<50 {
+            await Task.yield()
+        }
+
+        #expect(requestCount == 1)
+        #expect(fixture.service.status(for: first.sessionID) == .failed("AI 分析失败，请重试"))
+        #expect(fixture.service.captures(sessionID: first.sessionID).map(\.analysisState) == [.failed, .pending])
+
+        fixture.service.skipFailedCapture(sessionID: first.sessionID, captureID: first.captureID)
+        #expect(await self.waitUntil {
+            fixture.service.captures(sessionID: first.sessionID).last?.analysisState == .ready
+        })
+        #expect(requestCount == 2)
+    }
+
+    @Test
     func retryingTheFailedCaptureKeepsFIFOAndUsesOneAssistantID() async throws {
         var requestCount = 0
         var analyzedImages: [Data] = []
@@ -201,6 +252,73 @@ struct ScreenshotConversationQueueTests {
     }
 
     @Test
+    func genericRetryOfPausedQueueRemovesCompletedHeadAndContinuesDraining() async throws {
+        var requestCount = 0
+        let fixture = self.makeFixture { _, _, _, _ in
+            requestCount += 1
+            if requestCount == 1 {
+                throw QueueFailure.provider
+            }
+            return ScreenshotConversationAnalysis(
+                provider: "openai",
+                model: "gpt-5.5",
+                text: "answer-\(requestCount)")
+        }
+        defer { fixture.cleanup() }
+
+        let first = try fixture.service.submitScreenshot(imageData: Data([1]), reusing: nil)
+        let second = try fixture.service.submitScreenshot(imageData: Data([2]), reusing: first.sessionID)
+        fixture.service.enqueueAnalysis(first)
+        fixture.service.enqueueAnalysis(second)
+        #expect(await self.waitUntil {
+            fixture.service.captures(sessionID: first.sessionID).first?.analysisState == .failed
+        })
+        for _ in 0..<50 {
+            await Task.yield()
+        }
+
+        try await fixture.service.retryAnalysis(sessionID: first.sessionID)
+
+        #expect(await self.waitUntil {
+            fixture.service.captures(sessionID: first.sessionID).map(\.analysisState) == [.ready, .ready]
+        })
+        #expect(requestCount == 3)
+    }
+
+    @Test
+    func imageReadErrorTurnsPendingQueueHeadIntoRecoverableFailure() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-image-read-error-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let contextRoot = root.appendingPathComponent("context-root", isDirectory: true)
+        let contextStore = ScreenshotConversationContextStore(rootDirectory: contextRoot)
+        let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        let service = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            modelResolver: { _ in .openai(.gpt55) },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+            })
+        let submission = try service.submitScreenshot(imageData: Data([1]), reusing: nil)
+        let sessionUUID = try #require(UUID(uuidString: submission.sessionID))
+        let capture = try #require(contextStore.context(for: sessionUUID)?.captures.first)
+        let imageURL = contextRoot
+            .appendingPathComponent("images", isDirectory: true)
+            .appendingPathComponent(capture.imageFileName)
+        try FileManager.default.removeItem(at: imageURL)
+        try FileManager.default.createDirectory(at: imageURL, withIntermediateDirectories: true)
+
+        service.enqueueAnalysis(submission)
+
+        #expect(await self.waitUntil {
+            service.captures(sessionID: submission.sessionID).first?.analysisState == .failed
+        })
+        #expect(service.status(for: submission.sessionID) == .failed("原截图已丢失，请重新截图"))
+    }
+
+    @Test
     func textFollowUpIsRejectedWhileCaptureQueueIsBusy() async throws {
         let analyses = SuspendedCaptureAnalysis()
         let fixture = self.makeFixture { _, _, _, _ in
@@ -220,6 +338,9 @@ struct ScreenshotConversationQueueTests {
             provider: "openai",
             model: "gpt-5.5",
             text: "done"))
+        #expect(await self.waitUntil {
+            fixture.service.captures(sessionID: submission.sessionID).first?.analysisState == .ready
+        })
     }
 
     @Test
@@ -286,6 +407,157 @@ struct ScreenshotConversationQueueTests {
     }
 
     @Test
+    func startupMigratesV1ImageToTheExistingPromptAndAdjacentAnswer() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-v1-service-migration-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionID = UUID()
+        let promptID = UUID()
+        let assistantID = UUID()
+        let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        sessionStore.sessions = [ConversationSession(
+            id: sessionID.uuidString.lowercased(),
+            title: "截图分析",
+            messages: [
+                ConversationMessage(id: promptID, role: .user, content: "legacy prompt"),
+                ConversationMessage(id: assistantID, role: .assistant, content: "legacy answer"),
+            ],
+            kind: .screenshot)]
+        try sessionStore.persistSessionsNow()
+        let contextStore = ScreenshotConversationContextStore(
+            rootDirectory: root.appendingPathComponent("contexts", isDirectory: true))
+        _ = try contextStore.save(imageData: Data([1]), for: sessionID)
+
+        let service = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            modelResolver: { _ in .openai(.gpt55) },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+            })
+
+        let migrated = try #require(contextStore.context(for: sessionID))
+        #expect(migrated.schemaVersion == 2)
+        #expect(migrated.captures == [ScreenshotCapture(
+            id: promptID,
+            imageFileName: migrated.imageFileName,
+            createdAt: migrated.createdAt,
+            analysisState: .ready,
+            assistantMessageID: assistantID,
+        )])
+        #expect(service.captures(sessionID: sessionID.uuidString.lowercased()).map(\.analysisState) == [.ready])
+    }
+
+    @Test
+    func restartWithFailedCaptureBlocksTextInsteadOfMisroutingItAsCaptureRetry() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-restart-failed-capture-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionID = UUID()
+        let captureID = UUID()
+        let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        sessionStore.sessions = [ConversationSession(
+            id: sessionID.uuidString.lowercased(),
+            title: "截图分析",
+            messages: [ConversationMessage(id: captureID, role: .user, content: "unfinished screenshot")],
+            kind: .screenshot)]
+        try sessionStore.persistSessionsNow()
+        let contextStore = ScreenshotConversationContextStore(
+            rootDirectory: root.appendingPathComponent("contexts", isDirectory: true))
+        _ = try contextStore.save(
+            imageData: Data([1]),
+            for: sessionID,
+            captureID: captureID,
+            assistantMessageID: UUID())
+
+        let service = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            modelResolver: { _ in .openai(.gpt55) },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unexpected")
+            })
+
+        #expect(service.isBusy(sessionID: sessionID.uuidString.lowercased()))
+        await #expect(throws: ScreenshotConversationServiceError.requestAlreadyInProgress) {
+            try await service.sendFollowUp("new text", sessionID: sessionID.uuidString.lowercased())
+        }
+        #expect(sessionStore.session(id: sessionID.uuidString.lowercased())?.messages.map(\.content) == [
+            "unfinished screenshot",
+        ])
+    }
+
+    @Test
+    func restartCannotRetryALaterCaptureBeforeItsEarlierFailedBarrier() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-restart-capture-order-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionID = UUID()
+        let firstCaptureID = UUID()
+        let secondCaptureID = UUID()
+        let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        sessionStore.sessions = [ConversationSession(
+            id: sessionID.uuidString.lowercased(),
+            title: "截图分析",
+            messages: [
+                ConversationMessage(id: firstCaptureID, role: .user, content: "first"),
+                ConversationMessage(id: secondCaptureID, role: .user, content: "second"),
+            ],
+            kind: .screenshot)]
+        try sessionStore.persistSessionsNow()
+        let contextStore = ScreenshotConversationContextStore(
+            rootDirectory: root.appendingPathComponent("contexts", isDirectory: true))
+        _ = try contextStore.save(
+            imageData: Data([1]),
+            for: sessionID,
+            captureID: firstCaptureID,
+            assistantMessageID: UUID())
+        _ = try contextStore.append(
+            imageData: Data([2]),
+            captureID: secondCaptureID,
+            assistantMessageID: UUID(),
+            to: sessionID)
+        var analyzedImages: [Data] = []
+        let service = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: contextStore,
+            modelResolver: { _ in .openai(.gpt55) },
+            analyzer: { _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "unused")
+            },
+            captureAnalyzer: { imageData, _, _, _ in
+                analyzedImages.append(imageData)
+                return ScreenshotConversationAnalysis(
+                    provider: "openai",
+                    model: "gpt-5.5",
+                    text: "answer-\(analyzedImages.count)")
+            })
+
+        #expect(service.captures(sessionID: sessionID.uuidString.lowercased()).map(\.analysisState) == [
+            .failed,
+            .failed,
+        ])
+        service.retryCapture(sessionID: sessionID.uuidString.lowercased(), captureID: secondCaptureID)
+        for _ in 0..<50 {
+            await Task.yield()
+        }
+        #expect(analyzedImages.isEmpty)
+
+        service.retryCapture(sessionID: sessionID.uuidString.lowercased(), captureID: firstCaptureID)
+        #expect(await self.waitUntil {
+            service.captures(sessionID: sessionID.uuidString.lowercased()).first?.analysisState == .ready
+        })
+        service.retryCapture(sessionID: sessionID.uuidString.lowercased(), captureID: secondCaptureID)
+        #expect(await self.waitUntil {
+            service.captures(sessionID: sessionID.uuidString.lowercased()).map(\.analysisState) == [.ready, .ready]
+        })
+        #expect(analyzedImages == [Data([1]), Data([2])])
+    }
+
+    @Test
     func screenshotWaitsForTextAnswerAndPreservesPromptAnswerOrdering() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("peekaboo-text-capture-serialization-tests", isDirectory: true)
@@ -340,6 +612,153 @@ struct ScreenshotConversationQueueTests {
         ])
     }
 
+    @Test
+    func failedTextTurnPausesNewScreenshotUntilExactTextRetrySucceeds() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-text-failure-barrier-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suspendedText = SuspendedThrowingAnalysis()
+        var textRequestCount = 0
+        var captureRequestCount = 0
+        let sessionStore = SessionStore(storageURL: root.appendingPathComponent("sessions.json"))
+        let service = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: ScreenshotConversationContextStore(
+                rootDirectory: root.appendingPathComponent("contexts", isDirectory: true)),
+            modelResolver: { _ in .openai(.gpt55) },
+            analyzer: { _, _, _ in
+                textRequestCount += 1
+                if textRequestCount == 1 {
+                    return try await suspendedText.wait()
+                }
+                return ScreenshotConversationAnalysis(
+                    provider: "openai",
+                    model: "gpt-5.5",
+                    text: "text-retry-answer")
+            },
+            captureAnalyzer: { _, _, _, _ in
+                captureRequestCount += 1
+                return ScreenshotConversationAnalysis(
+                    provider: "openai",
+                    model: "gpt-5.5",
+                    text: "capture-answer-\(captureRequestCount)")
+            })
+        let first = try service.submitScreenshot(imageData: Data([1]), reusing: nil)
+        service.enqueueAnalysis(first)
+        #expect(await self.waitUntil {
+            service.captures(sessionID: first.sessionID).first?.analysisState == .ready
+        })
+
+        let followUp = Task {
+            try await service.sendFollowUp("text-that-fails", sessionID: first.sessionID)
+        }
+        #expect(await self.waitUntil { service.status(for: first.sessionID) == .analyzing })
+        let second = try service.submitScreenshot(imageData: Data([2]), reusing: first.sessionID)
+        service.enqueueAnalysis(second)
+        suspendedText.finish(.failure(QueueFailure.provider))
+        await #expect(throws: QueueFailure.provider) {
+            try await followUp.value
+        }
+        for _ in 0..<50 {
+            await Task.yield()
+        }
+        #expect(captureRequestCount == 1)
+        #expect(service.captures(sessionID: first.sessionID).last?.analysisState == .pending)
+        #expect(service.status(for: first.sessionID) == .failed("AI 分析失败，请重试"))
+
+        try await service.retryAnalysis(sessionID: first.sessionID)
+
+        #expect(await self.waitUntil {
+            service.captures(sessionID: first.sessionID).map(\.analysisState) == [.ready, .ready]
+        })
+        #expect(textRequestCount == 2)
+        #expect(captureRequestCount == 2)
+        #expect(sessionStore.session(id: first.sessionID)?.messages.map(\.content) == [
+            ScreenshotConversationService.defaultPrompt,
+            "capture-answer-1",
+            "text-that-fails",
+            "text-retry-answer",
+            ScreenshotConversationService.defaultPrompt,
+            "capture-answer-2",
+        ])
+    }
+
+    @Test
+    func textPersistenceFailureRetriesWithTheSameAssistantID() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peekaboo-text-persistence-retry-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storageURL = root.appendingPathComponent("sessions.json")
+        var textRequestCount = 0
+        let sessionStore = SessionStore(storageURL: storageURL)
+        let service = ScreenshotConversationService(
+            sessionStore: sessionStore,
+            contextStore: ScreenshotConversationContextStore(
+                rootDirectory: root.appendingPathComponent("contexts", isDirectory: true)),
+            modelResolver: { _ in .openai(.gpt55) },
+            analyzer: { _, _, _ in
+                textRequestCount += 1
+                return ScreenshotConversationAnalysis(
+                    provider: "openai",
+                    model: "gpt-5.5",
+                    text: textRequestCount == 1 ? "uncommitted" : "committed")
+            },
+            captureAnalyzer: { _, _, _, _ in
+                ScreenshotConversationAnalysis(provider: "openai", model: "gpt-5.5", text: "first")
+            })
+        let submission = try service.submitScreenshot(imageData: Data([1]), reusing: nil)
+        service.enqueueAnalysis(submission)
+        #expect(await self.waitUntil {
+            service.captures(sessionID: submission.sessionID).first?.analysisState == .ready
+        })
+        try FileManager.default.removeItem(at: storageURL)
+        try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+
+        await #expect(throws: (any Error).self) {
+            try await service.sendFollowUp("persist me", sessionID: submission.sessionID)
+        }
+        #expect(service.status(for: submission.sessionID) == .failed(
+            "无法保存 AI 回答，请检查磁盘空间后重试"))
+        let failedAssistantID = try #require(sessionStore.session(id: submission.sessionID)?.messages
+            .first(where: { $0.content == "uncommitted" })?.id)
+        try FileManager.default.removeItem(at: storageURL)
+
+        try await service.retryAnalysis(sessionID: submission.sessionID)
+
+        let messages = try #require(sessionStore.session(id: submission.sessionID)?.messages)
+        #expect(messages.filter { $0.id == failedAssistantID }.map(\.content) == ["committed"])
+        #expect(messages.filter { $0.role == .assistant }.map(\.content) == ["first", "committed"])
+    }
+
+    @Test
+    func deletingSessionDuringNoncooperativeCaptureDoesNotRestoreStatusOrContext() async throws {
+        let analyses = SuspendedCaptureAnalysis()
+        let fixture = self.makeFixture { _, _, _, _ in
+            await analyses.wait()
+        }
+        defer { fixture.cleanup() }
+        let submission = try fixture.service.submitScreenshot(imageData: Data([1]), reusing: nil)
+        fixture.service.enqueueAnalysis(submission)
+        #expect(await self.waitUntil {
+            fixture.service.captures(sessionID: submission.sessionID).first?.analysisState == .analyzing
+        })
+
+        try fixture.service.deleteSession(sessionID: submission.sessionID)
+        analyses.finish(ScreenshotConversationAnalysis(
+            provider: "openai",
+            model: "gpt-5.5",
+            text: "late"))
+        for _ in 0..<50 {
+            await Task.yield()
+        }
+
+        #expect(fixture.sessionStore.session(id: submission.sessionID) == nil)
+        #expect(fixture.service.status(for: submission.sessionID) == .idle)
+        #expect(fixture.service.captures(sessionID: submission.sessionID).isEmpty)
+    }
+
     private func makeFixture(
         captureAnalyzer: @escaping ScreenshotConversationService.CaptureAnalyzer) -> Fixture
     {
@@ -374,7 +793,7 @@ struct ScreenshotConversationQueueTests {
         return false
     }
 
-    private enum QueueFailure: Error {
+    private enum QueueFailure: Error, Equatable {
         case provider
     }
 
@@ -400,6 +819,23 @@ struct ScreenshotConversationQueueTests {
             } else {
                 self.bufferedResult = result
             }
+        }
+    }
+
+    @MainActor
+    private final class SuspendedThrowingAnalysis {
+        private var continuation: CheckedContinuation<Result<ScreenshotConversationAnalysis, any Error>, Never>?
+
+        func wait() async throws -> ScreenshotConversationAnalysis {
+            let result = await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+            return try result.get()
+        }
+
+        func finish(_ result: Result<ScreenshotConversationAnalysis, any Error>) {
+            self.continuation?.resume(returning: result)
+            self.continuation = nil
         }
     }
 
