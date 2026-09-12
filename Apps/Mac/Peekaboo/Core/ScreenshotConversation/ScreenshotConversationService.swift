@@ -811,8 +811,16 @@ final class ScreenshotConversationService {
             let result = try await requestTask.value
             guard self.activeRequestIDs[sessionID] == requestID, !requestTask.isCancelled else {
                 self.clearActiveRequest(sessionID: sessionID, requestID: requestID)
-                self.statuses[sessionID] = .idle
-                self.startDrainIfNeeded(sessionID: sessionID)
+                guard self.sessionStore.session(id: sessionID) != nil else {
+                    self.statuses[sessionID] = nil
+                    throw CancellationError()
+                }
+                if failedRequest == nil {
+                    self.statuses[sessionID] = .idle
+                    self.startDrainIfNeeded(sessionID: sessionID)
+                } else {
+                    self.statuses[sessionID] = .failed("AI 分析已取消，请重试")
+                }
                 throw CancellationError()
             }
             self.clearActiveRequest(sessionID: sessionID, requestID: requestID)
@@ -831,8 +839,21 @@ final class ScreenshotConversationService {
         } catch {
             self.clearActiveRequest(sessionID: sessionID, requestID: requestID)
             if requestTask.isCancelled || error is CancellationError {
-                self.statuses[sessionID] = .idle
-                self.startDrainIfNeeded(sessionID: sessionID)
+                guard self.sessionStore.session(id: sessionID) != nil else {
+                    self.statuses[sessionID] = nil
+                    throw CancellationError()
+                }
+                if failedRequest == nil {
+                    self.statuses[sessionID] = .idle
+                    self.startDrainIfNeeded(sessionID: sessionID)
+                } else {
+                    self.statuses[sessionID] = .failed("AI 分析已取消，请重试")
+                }
+                throw CancellationError()
+            }
+            guard self.sessionStore.session(id: sessionID) != nil else {
+                self.failedTextRequests[sessionID] = nil
+                self.statuses[sessionID] = nil
                 throw CancellationError()
             }
             self.failedTextRequests[sessionID] = FailedTextRequest(

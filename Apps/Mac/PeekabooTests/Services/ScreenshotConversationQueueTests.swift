@@ -825,8 +825,13 @@ struct ScreenshotConversationQueueTests {
     @MainActor
     private final class SuspendedThrowingAnalysis {
         private var continuation: CheckedContinuation<Result<ScreenshotConversationAnalysis, any Error>, Never>?
+        private var bufferedResult: Result<ScreenshotConversationAnalysis, any Error>?
 
         func wait() async throws -> ScreenshotConversationAnalysis {
+            if let bufferedResult = self.bufferedResult {
+                self.bufferedResult = nil
+                return try bufferedResult.get()
+            }
             let result = await withCheckedContinuation { continuation in
                 self.continuation = continuation
             }
@@ -834,8 +839,12 @@ struct ScreenshotConversationQueueTests {
         }
 
         func finish(_ result: Result<ScreenshotConversationAnalysis, any Error>) {
-            self.continuation?.resume(returning: result)
-            self.continuation = nil
+            if let continuation = self.continuation {
+                self.continuation = nil
+                continuation.resume(returning: result)
+            } else {
+                self.bufferedResult = result
+            }
         }
     }
 

@@ -201,23 +201,27 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
         let generation = self.movePersistenceGeneration
         self.scheduleMovePersistence { [weak self] in
             guard let self, generation == self.movePersistenceGeneration else { return }
-            self.hasPendingMovePersistence = false
-            self.normalizeAndPersistFrame()
+            if self.normalizeAndPersistFrame() {
+                self.hasPendingMovePersistence = false
+            }
         }
     }
 
     private func panelDidChangeScreen() {
-        self.hasPendingMovePersistence = false
         self.movePersistenceGeneration += 1
         guard !self.screenFrames().isEmpty else { return }
         self.updateSizeConstraints(fallbackScreen: self.currentFallbackScreen())
-        self.normalizeAndPersistFrame()
+        if self.normalizeAndPersistFrame() {
+            self.hasPendingMovePersistence = false
+        }
     }
 
     private func panelDidEndLiveResize() {
-        self.hasPendingMovePersistence = false
+        self.hasPendingMovePersistence = true
         self.movePersistenceGeneration += 1
-        self.normalizeAndPersistFrame()
+        if self.normalizeAndPersistFrame() {
+            self.hasPendingMovePersistence = false
+        }
     }
 
     private func constrainedResize(_ proposedSize: CGSize) -> CGSize {
@@ -233,27 +237,31 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
 
     private func resetToDefaultSize() {
         guard let panel = self.panel else { return }
-        self.hasPendingMovePersistence = false
+        self.hasPendingMovePersistence = true
         self.movePersistenceGeneration += 1
         let proposed = CGRect(origin: panel.frame.origin, size: FloatingPanelGeometry.defaultSize)
-        self.normalizeAndPersistFrame(proposedFrame: proposed)
+        if self.normalizeAndPersistFrame(proposedFrame: proposed) {
+            self.hasPendingMovePersistence = false
+        }
     }
 
-    private func normalizeAndPersistFrame(proposedFrame: CGRect? = nil) {
+    @discardableResult
+    private func normalizeAndPersistFrame(proposedFrame: CGRect? = nil) -> Bool {
         guard !self.isApplyingFrame,
               let panel = self.panel
-        else { return }
+        else { return false }
         let screens = self.screenFrames()
         guard !screens.isEmpty,
               let normalized = FloatingPanelGeometry.normalizedFrame(
                   proposedFrame ?? panel.frame,
                   screens: screens,
                   fallbackScreen: self.currentFallbackScreen())
-        else { return }
+        else { return false }
 
         self.updateSizeConstraints(for: normalized, screens: screens, fallbackScreen: self.currentFallbackScreen())
         self.applyFrame(normalized, to: panel)
         self.geometryStore.saveFrame(normalized)
+        return true
     }
 
     private func updateSizeConstraints(fallbackScreen: CGRect?) {
@@ -319,8 +327,9 @@ final class FloatingScreenshotChatPanelController: ScreenshotConversationPresent
 
     private func flushPendingMovePersistence() {
         guard self.hasPendingMovePersistence else { return }
-        self.hasPendingMovePersistence = false
-        self.normalizeAndPersistFrame()
+        if self.normalizeAndPersistFrame() {
+            self.hasPendingMovePersistence = false
+        }
     }
 
     private func applyFrame(_ frame: CGRect, to panel: any FloatingPanelControlling) {

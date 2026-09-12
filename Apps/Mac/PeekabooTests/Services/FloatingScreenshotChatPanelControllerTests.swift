@@ -272,6 +272,68 @@ struct FloatingScreenshotChatPanelControllerTests {
     }
 
     @Test
+    func presentationKeepsPendingMoveDirtyUntilScreensRecover() throws {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+        var screens = [visibleFrame]
+        var scheduledActions: [@MainActor () -> Void] = []
+        let store = TestFloatingPanelGeometryStore()
+        let fixture = PanelControllerFixture(
+            visibleFrames: [7: visibleFrame],
+            screenFrames: { screens },
+            geometryStore: store,
+            scheduleMovePersistence: { scheduledActions.append($0) })
+        fixture.controller.present(Self.context(
+            sessionID: "same",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: 7))
+        let panel = try #require(fixture.createdPanels.first)
+        panel.frame = CGRect(x: 300, y: 180, width: 720, height: 500)
+        panel.sendDidMove()
+        screens = []
+
+        fixture.controller.present(Self.context(
+            sessionID: "same",
+            selectionRect: CGRect(x: 800, y: 500, width: 200, height: 100),
+            displayID: 7,
+            isNewSession: false))
+        scheduledActions.forEach { $0() }
+        #expect(store.savedFrames.isEmpty)
+
+        screens = [visibleFrame]
+        panel.sendDidChangeScreen()
+        #expect(store.savedFrames == [panel.frame])
+    }
+
+    @Test
+    func dismissalKeepsPendingMoveDirtyUntilScreensRecover() throws {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+        var screens = [visibleFrame]
+        var scheduledActions: [@MainActor () -> Void] = []
+        let store = TestFloatingPanelGeometryStore()
+        let fixture = PanelControllerFixture(
+            visibleFrames: [7: visibleFrame],
+            screenFrames: { screens },
+            geometryStore: store,
+            scheduleMovePersistence: { scheduledActions.append($0) })
+        fixture.controller.present(Self.context(
+            sessionID: "dismiss-after-move",
+            selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
+            displayID: 7))
+        let panel = try #require(fixture.createdPanels.first)
+        panel.frame = CGRect(x: 300, y: 180, width: 720, height: 500)
+        panel.sendDidMove()
+        screens = []
+
+        fixture.controller.dismiss()
+        scheduledActions.forEach { $0() }
+        #expect(store.savedFrames.isEmpty)
+
+        screens = [visibleFrame]
+        panel.sendDidChangeScreen()
+        #expect(store.savedFrames == [panel.frame])
+    }
+
+    @Test
     func liveResizeIsConstrainedAndItsEndIsImmediatelyNormalizedAndSaved() throws {
         let store = TestFloatingPanelGeometryStore()
         let fixture = PanelControllerFixture(geometryStore: store)
