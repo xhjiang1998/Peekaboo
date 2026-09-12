@@ -100,7 +100,8 @@ struct CaptureSelectionTests {
         let monitor = CaptureSelectionEscapeMonitor(
             addMonitor: { _ in token },
             removeMonitor: { removedToken in
-                #expect((removedToken as AnyObject) === token)
+                let isExpectedToken = (removedToken as AnyObject) === token
+                #expect(isExpectedToken)
                 removeCount += 1
             })
 
