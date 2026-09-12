@@ -78,4 +78,62 @@ struct FloatingPanelPlacementTests {
 
         #expect(origin.y == 164)
     }
+
+    @Test
+    func `Normalization chooses the screen with the greatest intersection and clamps both axes`() throws {
+        let left = CGRect(x: -1440, y: 0, width: 1440, height: 900)
+        let right = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+
+        let normalized = try #require(FloatingPanelGeometry.normalizedFrame(
+            CGRect(x: -200, y: -500, width: 800, height: 1200),
+            screens: [left, right],
+            fallbackScreen: nil))
+
+        #expect(normalized == CGRect(x: 16, y: 16, width: 800, height: 1048))
+    }
+
+    @Test
+    func `Normalization uses fallback for an offscreen frame and preserves negative coordinates`() throws {
+        let fallback = CGRect(x: -1440, y: -20, width: 1440, height: 900)
+
+        let normalized = try #require(FloatingPanelGeometry.normalizedFrame(
+            CGRect(x: 5000, y: 5000, width: 460, height: 600),
+            screens: [fallback, CGRect(x: 0, y: 0, width: 1440, height: 900)],
+            fallbackScreen: fallback))
+
+        #expect(normalized == CGRect(x: -476, y: 264, width: 460, height: 600))
+    }
+
+    @Test
+    func `Normalization shrinks below standard minimum only for an unusually small screen`() throws {
+        let tinyScreen = CGRect(x: 20, y: 30, width: 300, height: 220)
+
+        let normalized = try #require(FloatingPanelGeometry.normalizedFrame(
+            CGRect(x: 0, y: 0, width: 100, height: 100),
+            screens: [tinyScreen],
+            fallbackScreen: nil))
+
+        #expect(normalized == CGRect(x: 36, y: 46, width: 268, height: 188))
+    }
+
+    @Test
+    func `Normalization returns nil when no screens are available`() {
+        #expect(FloatingPanelGeometry.normalizedFrame(
+            CGRect(x: 0, y: 0, width: 460, height: 600),
+            screens: [],
+            fallbackScreen: nil) == nil)
+    }
+
+    @Test
+    func `A stale fallback screen is ignored after that display disappears`() throws {
+        let remainingScreen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let staleScreen = CGRect(x: -1440, y: 0, width: 1440, height: 900)
+
+        let normalized = try #require(FloatingPanelGeometry.normalizedFrame(
+            CGRect(x: 5_000, y: 5_000, width: 460, height: 600),
+            screens: [remainingScreen],
+            fallbackScreen: staleScreen))
+
+        #expect(normalized == CGRect(x: 964, y: 284, width: 460, height: 600))
+    }
 }

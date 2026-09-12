@@ -1,9 +1,11 @@
+import Foundation
 import Observation
 
 @Observable
 @MainActor
 final class FloatingScreenshotChatState {
     private(set) var currentContext: ScreenshotPresentationContext?
+    private(set) var selectedCaptureID: UUID?
     var isPreviewExpanded = false
     private(set) var presentationGeneration = 0
     private(set) var dismissedGeneration: Int?
@@ -13,14 +15,22 @@ final class FloatingScreenshotChatState {
     }
 
     func present(_ context: ScreenshotPresentationContext) {
+        let preservesPresentationState = !context.isNewSession && self.currentContext?.sessionID == context.sessionID
         self.currentContext = context
-        self.isPreviewExpanded = false
+        self.selectedCaptureID = context.captureID
+        if !preservesPresentationState {
+            self.isPreviewExpanded = false
+        }
         self.presentationGeneration += 1
         self.dismissedGeneration = nil
     }
 
     func togglePreview() {
         self.isPreviewExpanded.toggle()
+    }
+
+    func selectCapture(_ captureID: UUID) {
+        self.selectedCaptureID = captureID
     }
 
     func markDismissed() {

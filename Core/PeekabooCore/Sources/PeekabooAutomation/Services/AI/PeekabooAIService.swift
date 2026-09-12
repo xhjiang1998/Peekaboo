@@ -300,6 +300,61 @@ public final class PeekabooAIService {
         return AnalysisResult(provider: provider, model: modelName, text: normalizedText)
     }
 
+    /// Analyze one screenshot turn against prior text history. The image is bound
+    /// only to `currentPrompt`; callers must not also include that prompt in `history`.
+    public func analyzeImageTurn(
+        imageData: Data,
+        history: [ConversationTurn],
+        currentPrompt: String,
+        model: LanguageModel) async throws -> AnalysisResult
+    {
+        let selectedModel = try self.resolveVisionModel(model)
+        let messages = Self.makeImageTurnMessages(
+            imageData: imageData,
+            history: history,
+            currentPrompt: currentPrompt)
+        let response = try await self.textGenerator(
+            selectedModel,
+            messages,
+            self.tachikomaConfiguration(for: selectedModel))
+        let (provider, modelName) = Self.providerAndModelName(for: selectedModel)
+        let normalizedText = Self.normalizeCoordinateTextIfNeeded(
+            response.text,
+            model: modelName,
+            imageSize: Self.imageSize(from: imageData))
+        return AnalysisResult(provider: provider, model: modelName, text: normalizedText)
+    }
+
+    static func makeImageTurnMessages(
+        imageData: Data,
+        history: [ConversationTurn],
+        currentPrompt: String) -> [ModelMessage]
+    {
+        var retainedHistory = history
+        if retainedHistory.count > 19 {
+            retainedHistory = [retainedHistory[0]] + Array(retainedHistory.dropFirst().suffix(18))
+        }
+        let currentTurn = ConversationTurn(role: .user, text: currentPrompt)
+        let retainedTurns = Self.trimmingConversationText(
+            retainedHistory + [currentTurn],
+            limit: 32_000)
+        let currentIndex = retainedTurns.index(before: retainedTurns.endIndex)
+        let imageContent = ModelMessage.ContentPart.ImageContent(
+            data: imageData.base64EncodedString(),
+            mimeType: "image/png")
+
+        return retainedTurns.enumerated().map { index, turn in
+            switch turn.role {
+            case .user where index == currentIndex:
+                ModelMessage.user(text: turn.text, images: [imageContent])
+            case .user:
+                ModelMessage.user(turn.text)
+            case .assistant:
+                ModelMessage.assistant(turn.text)
+            }
+        }
+    }
+
     static func makeImageConversationMessages(
         imageData: Data?,
         turns: [ConversationTurn]) throws -> [ModelMessage]

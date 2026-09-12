@@ -10,6 +10,10 @@ enum SessionStoreLoadState: Equatable {
     case failed
 }
 
+enum SessionStorePersistenceError: Error, Equatable {
+    case existingPersistenceUnreadable
+}
+
 /// Manages conversation sessions with automatic persistence.
 ///
 /// Sessions are automatically saved to `~/Library/Application Support/Peekaboo/sessions.json`
@@ -76,6 +80,27 @@ final class SessionStore {
     func addMessage(_ message: ConversationMessage, to session: ConversationSession) {
         guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         self.sessions[index].messages.append(message)
+        Task { @MainActor in
+            self.saveSessions()
+        }
+    }
+
+    func insertOrUpdateMessage(
+        _ message: ConversationMessage,
+        after anchorMessageID: UUID,
+        in sessionID: String)
+    {
+        guard let sessionIndex = self.sessions.firstIndex(where: { $0.id == sessionID }),
+              message.id != anchorMessageID
+        else { return }
+
+        var messages = self.sessions[sessionIndex].messages
+        messages.removeAll(where: { $0.id == message.id })
+        guard let anchorIndex = messages.firstIndex(where: { $0.id == anchorMessageID }) else {
+            return
+        }
+        messages.insert(message, at: anchorIndex + 1)
+        self.sessions[sessionIndex].messages = messages
         Task { @MainActor in
             self.saveSessions()
         }
@@ -156,21 +181,24 @@ final class SessionStore {
     }
 
     func saveSessions() {
-        guard self.loadState != .failed else {
-            print("Skipped saving sessions because existing persistence could not be loaded")
-            return
-        }
         do {
-            try FileManager.default.createDirectory(
-                at: self.storageURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = .prettyPrinted
-            let data = try encoder.encode(self.sessions)
-            try data.write(to: self.storageURL, options: .atomic)
+            try self.persistSessionsNow()
         } catch {
             print("Failed to save sessions: \(error)")
         }
+    }
+
+    func persistSessionsNow() throws {
+        guard self.loadState != .failed else {
+            throw SessionStorePersistenceError.existingPersistenceUnreadable
+        }
+        try FileManager.default.createDirectory(
+            at: self.storageURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .prettyPrinted
+        let data = try encoder.encode(self.sessions)
+        try data.write(to: self.storageURL, options: .atomic)
     }
 }

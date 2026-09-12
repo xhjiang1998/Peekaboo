@@ -53,6 +53,8 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
     typealias ConversationPresenter = (ScreenshotPresentationContext) -> Void
     typealias ConversationAnalyzer = (String) async throws -> Void
     typealias ConversationCanceller = (String) -> Void
+    typealias ScreenshotSubmitter = (_ imageData: Data, _ reusableSessionID: String?) throws -> ScreenshotSubmission
+    typealias AnalysisEnqueuer = (ScreenshotSubmission) -> Void
 
     private(set) var state: CaptureAndAskState = .idle
 
@@ -66,6 +68,9 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
     private let cancelConversation: ConversationCanceller
     private let cancelSelection: () -> Void
     private let reportFailure: (CaptureAndAskFailure) -> Void
+    private let lifetime: ScreenshotConversationLifetime?
+    private let submitScreenshot: ScreenshotSubmitter?
+    private let enqueueAnalysis: AnalysisEnqueuer?
     private var captureTask: Task<Void, Never>?
     private var analysisTask: Task<Void, Never>?
     private var latestSessionID: String?
@@ -92,12 +97,43 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         self.cancelConversation = cancelConversation
         self.cancelSelection = cancelSelection
         self.reportFailure = reportFailure
+        self.lifetime = nil
+        self.submitScreenshot = nil
+        self.enqueueAnalysis = nil
+    }
+
+    init(
+        permissionCheck: @escaping PermissionCheck,
+        selectArea: @escaping AreaSelector,
+        resolveCaptureRect: @escaping CaptureRectResolver,
+        captureArea: @escaping AreaCapture,
+        lifetime: ScreenshotConversationLifetime,
+        submitScreenshot: @escaping ScreenshotSubmitter,
+        presentConversation: @escaping ConversationPresenter,
+        enqueueAnalysis: @escaping AnalysisEnqueuer,
+        cancelSelection: @escaping () -> Void = {},
+        reportFailure: @escaping (CaptureAndAskFailure) -> Void = { _ in })
+    {
+        self.permissionCheck = permissionCheck
+        self.selectArea = selectArea
+        self.resolveCaptureRect = resolveCaptureRect
+        self.captureArea = captureArea
+        self.createConversation = { _ in "" }
+        self.presentConversation = presentConversation
+        self.analyze = { _ in }
+        self.cancelConversation = { _ in }
+        self.cancelSelection = cancelSelection
+        self.reportFailure = reportFailure
+        self.lifetime = lifetime
+        self.submitScreenshot = submitScreenshot
+        self.enqueueAnalysis = enqueueAnalysis
     }
 
     convenience init(
         services: PeekabooServices,
         selector: any CaptureAreaSelecting,
         conversationService: ScreenshotConversationService,
+        lifetime: ScreenshotConversationLifetime,
         conversationPresenter: any ScreenshotConversationPresenting)
     {
         self.init(
@@ -117,17 +153,15 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
                     scale: .logical1x)
                 return result.imageData
             },
-            createConversation: { imageData in
-                try conversationService.createConversation(imageData: imageData).id
+            lifetime: lifetime,
+            submitScreenshot: { imageData, reusableSessionID in
+                try conversationService.submitScreenshot(imageData: imageData, reusing: reusableSessionID)
             },
             presentConversation: { context in
                 conversationPresenter.present(context)
             },
-            analyze: { sessionID in
-                try await conversationService.analyze(sessionID: sessionID)
-            },
-            cancelConversation: { sessionID in
-                conversationService.cancel(sessionID: sessionID)
+            enqueueAnalysis: { submission in
+                conversationService.enqueueAnalysis(submission)
             },
             cancelSelection: {
                 selector.cancel()
@@ -144,7 +178,9 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             let sessionID = await self.prepareCapture()
             self.captureTask = nil
             guard let sessionID else { return }
-            self.beginAnalysis(sessionID: sessionID)
+            if self.enqueueAnalysis == nil {
+                self.beginAnalysis(sessionID: sessionID)
+            }
         }
     }
 
@@ -157,7 +193,9 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
 
     func performCapture() async {
         guard let sessionID = await self.prepareCapture() else { return }
-        await self.beginAnalysis(sessionID: sessionID).value
+        if self.enqueueAnalysis == nil {
+            await self.beginAnalysis(sessionID: sessionID).value
+        }
     }
 
     private func prepareCapture() async -> String? {
@@ -191,6 +229,37 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
         } catch {
             self.fail(.captureFailed)
             return nil
+        }
+
+        guard !Task.isCancelled else {
+            self.state = .idle
+            return nil
+        }
+
+        if let lifetime = self.lifetime,
+           let submitScreenshot = self.submitScreenshot,
+           let enqueueAnalysis = self.enqueueAnalysis
+        {
+            let submission: ScreenshotSubmission
+            do {
+                submission = try submitScreenshot(imageData, lifetime.reusableSessionID)
+            } catch {
+                self.fail(.conversationFailed)
+                return nil
+            }
+
+            lifetime.bind(sessionID: submission.sessionID)
+            self.latestSessionID = submission.sessionID
+            self.state = .presenting(sessionID: submission.sessionID)
+            self.presentConversation(ScreenshotPresentationContext(
+                sessionID: submission.sessionID,
+                captureID: submission.captureID,
+                selectionRect: selection.rect,
+                displayID: selection.displayID,
+                isNewSession: submission.isNewSession))
+            self.state = .analyzing(sessionID: submission.sessionID)
+            enqueueAnalysis(submission)
+            return submission.sessionID
         }
 
         let sessionID: String

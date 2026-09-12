@@ -85,22 +85,19 @@ struct CaptureAndAskCoordinatorTests {
     }
 
     @Test
-    func `Selection focus restores the original application exactly once`() {
+    func `Selection focus restores the original application without activating Peekaboo`() {
         var events: [String] = []
         let focus = CaptureSelectionFocusController(
             captureRestoreAction: {
                 events.append("capture-frontmost")
                 return { events.append("restore-frontmost") }
-            },
-            activateForSelection: {
-                events.append("activate-peekaboo")
             })
 
         focus.prepareForSelection()
         focus.restoreAfterSelection()
         focus.restoreAfterSelection()
 
-        #expect(events == ["capture-frontmost", "activate-peekaboo", "restore-frontmost"])
+        #expect(events == ["capture-frontmost", "restore-frontmost"])
     }
 
     @Test

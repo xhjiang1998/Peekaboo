@@ -71,15 +71,10 @@ final class CaptureSelectionFocusController {
     typealias CaptureRestoreAction = @MainActor () -> RestoreAction?
 
     private let captureRestoreAction: CaptureRestoreAction
-    private let activateForSelection: @MainActor () -> Void
     private var restoreAction: RestoreAction?
 
-    init(
-        captureRestoreAction: @escaping CaptureRestoreAction,
-        activateForSelection: @escaping @MainActor () -> Void)
-    {
+    init(captureRestoreAction: @escaping CaptureRestoreAction) {
         self.captureRestoreAction = captureRestoreAction
-        self.activateForSelection = activateForSelection
     }
 
     convenience init() {
@@ -89,15 +84,11 @@ final class CaptureSelectionFocusController {
                 return {
                     application.activate()
                 }
-            },
-            activateForSelection: {
-                NSApp.activate(ignoringOtherApps: true)
             })
     }
 
     func prepareForSelection() {
         self.restoreAction = self.captureRestoreAction()
-        self.activateForSelection()
     }
 
     func restoreAfterSelection() {
@@ -107,14 +98,78 @@ final class CaptureSelectionFocusController {
     }
 }
 
+enum CaptureSelectionPanelPolicy {
+    static let styleMask: NSWindow.StyleMask = [.borderless, .nonactivatingPanel]
+    static let collectionBehavior: NSWindow.CollectionBehavior = [
+        .canJoinAllSpaces,
+        .stationary,
+        .fullScreenAuxiliary,
+    ]
+    static let canBecomeKey = true
+    static let canBecomeMain = false
+
+    static func initialKeyPanelIndex(
+        mouseLocation: CGPoint,
+        screenFrames: [CGRect]) -> Int?
+    {
+        screenFrames.firstIndex(where: { $0.contains(mouseLocation) }) ?? screenFrames.indices.first
+    }
+
+    static func needsEscapeFallback(
+        hasSelectionKeyPanel: Bool,
+        isResponderHandlingEscape: Bool) -> Bool
+    {
+        hasSelectionKeyPanel && !isResponderHandlingEscape
+    }
+}
+
+@MainActor
+final class CaptureSelectionEscapeMonitor {
+    typealias EventHandler = (NSEvent) -> NSEvent?
+    typealias AddMonitor = (@escaping EventHandler) -> Any?
+    typealias RemoveMonitor = (Any) -> Void
+
+    private let addMonitor: AddMonitor
+    private let removeMonitor: RemoveMonitor
+    private var token: Any?
+
+    init(
+        addMonitor: @escaping AddMonitor = { handler in
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: handler)
+        },
+        removeMonitor: @escaping RemoveMonitor = { token in
+            NSEvent.removeMonitor(token)
+        })
+    {
+        self.addMonitor = addMonitor
+        self.removeMonitor = removeMonitor
+    }
+
+    func start(handler: @escaping EventHandler) {
+        guard self.token == nil else { return }
+        self.token = self.addMonitor(handler)
+    }
+
+    func stop() {
+        guard let token = self.token else { return }
+        self.token = nil
+        self.removeMonitor(token)
+    }
+}
+
 @MainActor
 final class CaptureSelectionController: CaptureAreaSelecting {
     private var panels: [CaptureSelectionPanel] = []
     private var continuation: CheckedContinuation<CaptureSelection?, any Error>?
+    private let escapeMonitor = CaptureSelectionEscapeMonitor()
     private let focusController: CaptureSelectionFocusController
 
-    init(focusController: CaptureSelectionFocusController = CaptureSelectionFocusController()) {
+    init(focusController: CaptureSelectionFocusController) {
         self.focusController = focusController
+    }
+
+    convenience init() {
+        self.init(focusController: CaptureSelectionFocusController())
     }
 
     func selectArea() async throws -> CaptureSelection? {
@@ -161,13 +216,20 @@ final class CaptureSelectionController: CaptureAreaSelecting {
             panel.orderFrontRegardless()
             return panel
         }
-        self.panels.last?.makeKey()
+        let keyPanelIndex = CaptureSelectionPanelPolicy.initialKeyPanelIndex(
+            mouseLocation: NSEvent.mouseLocation,
+            screenFrames: screens.map(\.frame))
+        if let keyPanelIndex {
+            self.panels[keyPanelIndex].makeKey()
+        }
+        self.installEscapeFallbackMonitor()
         NSCursor.crosshair.set()
     }
 
     private func finish(with selection: CaptureSelection?) {
         let continuation = self.continuation
         self.continuation = nil
+        self.escapeMonitor.stop()
         for panel in self.panels {
             panel.orderOut(nil)
             panel.close()
@@ -178,6 +240,24 @@ final class CaptureSelectionController: CaptureAreaSelecting {
         continuation?.resume(returning: selection)
     }
 
+    private func installEscapeFallbackMonitor() {
+        self.escapeMonitor.start { [weak self] event in
+            guard event.keyCode == 53 || event.charactersIgnoringModifiers == "\u{1b}" else {
+                return event
+            }
+            let keyPanel = NSApp.keyWindow as? CaptureSelectionPanel
+            let responderHandlesEscape = keyPanel?.firstResponder is CaptureSelectionView
+            guard CaptureSelectionPanelPolicy.needsEscapeFallback(
+                hasSelectionKeyPanel: keyPanel != nil,
+                isResponderHandlingEscape: responderHandlesEscape)
+            else {
+                return event
+            }
+            self?.finish(with: nil)
+            return nil
+        }
+    }
+
     private static func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         return (screen.deviceDescription[key] as? NSNumber)?.uint32Value
@@ -185,13 +265,13 @@ final class CaptureSelectionController: CaptureAreaSelecting {
 }
 
 private final class CaptureSelectionPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeKey: Bool { CaptureSelectionPanelPolicy.canBecomeKey }
+    override var canBecomeMain: Bool { CaptureSelectionPanelPolicy.canBecomeMain }
 
     init(screen: NSScreen) {
         super.init(
             contentRect: screen.frame,
-            styleMask: [.borderless],
+            styleMask: CaptureSelectionPanelPolicy.styleMask,
             backing: .buffered,
             defer: false)
         self.setFrame(screen.frame, display: false)
@@ -202,7 +282,7 @@ private final class CaptureSelectionPanel: NSPanel {
         self.ignoresMouseEvents = false
         self.hidesOnDeactivate = false
         self.isReleasedWhenClosed = false
-        self.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        self.collectionBehavior = CaptureSelectionPanelPolicy.collectionBehavior
     }
 }
 

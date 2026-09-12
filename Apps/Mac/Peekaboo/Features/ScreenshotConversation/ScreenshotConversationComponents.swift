@@ -1,5 +1,166 @@
 import AppKit
+import ImageIO
 import SwiftUI
+
+struct ScreenshotCaptureStatusPresentation: Equatable {
+    let title: String
+    let systemImage: String
+    let offersRecovery: Bool
+
+    init(state: ScreenshotCaptureAnalysisState) {
+        switch state {
+        case .pending:
+            self.init(title: "等待中", systemImage: "clock", offersRecovery: false)
+        case .analyzing:
+            self.init(title: "分析中", systemImage: "sparkles", offersRecovery: false)
+        case .ready:
+            self.init(title: "已完成", systemImage: "checkmark.circle.fill", offersRecovery: false)
+        case .failed:
+            self.init(title: "失败", systemImage: "exclamationmark.triangle.fill", offersRecovery: true)
+        case .skipped:
+            self.init(title: "已跳过", systemImage: "forward.fill", offersRecovery: false)
+        }
+    }
+
+    private init(title: String, systemImage: String, offersRecovery: Bool) {
+        self.title = title
+        self.systemImage = systemImage
+        self.offersRecovery = offersRecovery
+    }
+}
+
+struct ScreenshotCaptureBrowser: View {
+    @Environment(ScreenshotConversationService.self) private var screenshotConversationService
+
+    let sessionID: String
+    let selectedCaptureID: UUID?
+    let isExpanded: Bool
+    let onSelectCapture: (UUID) -> Void
+
+    var body: some View {
+        let captures = self.screenshotConversationService.captures(sessionID: self.sessionID)
+        let selectedCapture = captures.first(where: { $0.captureID == self.selectedCaptureID }) ?? captures.last
+        VStack(alignment: .leading, spacing: 10) {
+            if captures.count > 1 {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(captures) { capture in
+                            ScreenshotCaptureThumbnailButton(
+                                sessionID: self.sessionID,
+                                capture: capture,
+                                isSelected: capture.captureID == selectedCapture?.captureID,
+                                onSelect: { self.onSelectCapture(capture.captureID) })
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
+
+            ScreenshotPreviewCard(
+                sessionID: self.sessionID,
+                captureID: selectedCapture?.captureID,
+                isExpanded: self.isExpanded)
+
+            if let selectedCapture,
+               ScreenshotCaptureStatusPresentation(state: selectedCapture.analysisState).offersRecovery
+            {
+                HStack(spacing: 12) {
+                    Label("这张截图分析失败", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button("跳过") {
+                        Task {
+                            try? await self.screenshotConversationService.skipFailedCapture(
+                                sessionID: self.sessionID,
+                                captureID: selectedCapture.captureID)
+                        }
+                    }
+                    .buttonStyle(.link)
+                    Button("重试") {
+                        Task {
+                            try? await self.screenshotConversationService.retryCapture(
+                                sessionID: self.sessionID,
+                                captureID: selectedCapture.captureID)
+                        }
+                    }
+                    .buttonStyle(.link)
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+    }
+}
+
+private struct ScreenshotCaptureThumbnailButton: View {
+    let sessionID: String
+    let capture: ScreenshotCaptureDescriptor
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    @Environment(ScreenshotConversationService.self) private var screenshotConversationService
+    @State private var thumbnail: NSImage?
+
+    var body: some View {
+        let status = ScreenshotCaptureStatusPresentation(state: self.capture.analysisState)
+        Button(action: self.onSelect) {
+            VStack(alignment: .leading, spacing: 5) {
+                Group {
+                    if let thumbnail {
+                        Image(nsImage: thumbnail)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: "photo")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 72, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                Text("截图 \(self.capture.index)")
+                    .font(.caption.weight(.semibold))
+                Label(status.title, systemImage: status.systemImage)
+                    .font(.caption2)
+                    .foregroundStyle(self.capture.analysisState == .failed ? Color.red : Color.secondary)
+            }
+            .padding(6)
+            .background(
+                self.isSelected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(self.isSelected ? Color.accentColor : .clear, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("截图 \(self.capture.index)，\(status.title)")
+        .task(id: self.capture.captureID) {
+            self.thumbnail = nil
+            guard let data = try? self.screenshotConversationService.imageData(
+                sessionID: self.sessionID,
+                captureID: self.capture.captureID)
+            else { return }
+            self.thumbnail = Self.downsampledImage(data, maximumPixelSize: 160)
+        }
+    }
+
+    private static func downsampledImage(_ data: Data, maximumPixelSize: CGFloat) -> NSImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(
+                  source,
+                  0,
+                  options as CFDictionary)
+        else { return nil }
+        return NSImage(cgImage: image, size: .zero)
+    }
+}
 
 struct ScreenshotPreviewCard: View {
     static let collapsedHeight: CGFloat = 100
@@ -8,6 +169,7 @@ struct ScreenshotPreviewCard: View {
     @Environment(ScreenshotConversationService.self) private var screenshotConversationService
 
     let sessionID: String
+    var captureID: UUID?
     let isExpanded: Bool
 
     @State private var imageData: Data?
@@ -42,10 +204,22 @@ struct ScreenshotPreviewCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: self.sessionID) {
+        .task(id: "\(self.sessionID)-\(self.captureID?.uuidString ?? "legacy")") {
             self.imageData = nil
-            self.imageData = try? self.screenshotConversationService.imageData(for: self.sessionID)
+            if let captureID {
+                self.imageData = try? self.screenshotConversationService.imageData(
+                    sessionID: self.sessionID,
+                    captureID: captureID)
+            } else {
+                self.imageData = try? self.screenshotConversationService.imageData(for: self.sessionID)
+            }
         }
+    }
+
+    init(sessionID: String, captureID: UUID? = nil, isExpanded: Bool) {
+        self.sessionID = sessionID
+        self.captureID = captureID
+        self.isExpanded = isExpanded
     }
 }
 

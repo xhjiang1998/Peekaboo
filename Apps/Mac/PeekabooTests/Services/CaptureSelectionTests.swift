@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Testing
 @testable import Peekaboo
@@ -53,5 +54,60 @@ struct CaptureSelectionTests {
 
         #expect(selection.rect == CGRect(x: 100, y: 0, width: 700, height: 100))
         #expect(selection.displayID == 42)
+    }
+
+    @Test
+    func `Selection panel policy supports full screen without becoming main`() {
+        #expect(CaptureSelectionPanelPolicy.styleMask == [.borderless, .nonactivatingPanel])
+        #expect(CaptureSelectionPanelPolicy.collectionBehavior.contains(.fullScreenAuxiliary))
+        #expect(CaptureSelectionPanelPolicy.collectionBehavior.contains(.canJoinAllSpaces))
+        #expect(CaptureSelectionPanelPolicy.canBecomeKey)
+        #expect(!CaptureSelectionPanelPolicy.canBecomeMain)
+    }
+
+    @Test
+    func `Initial key panel follows the screen containing the mouse`() {
+        let frames = [
+            CGRect(x: 0, y: 0, width: 800, height: 600),
+            CGRect(x: 800, y: 0, width: 800, height: 600),
+        ]
+
+        #expect(CaptureSelectionPanelPolicy.initialKeyPanelIndex(
+            mouseLocation: CGPoint(x: 1200, y: 300),
+            screenFrames: frames) == 1)
+        #expect(CaptureSelectionPanelPolicy.initialKeyPanelIndex(
+            mouseLocation: CGPoint(x: -100, y: 300),
+            screenFrames: frames) == 0)
+    }
+
+    @Test
+    func `Escape fallback monitor is active only for a selection key panel`() {
+        #expect(CaptureSelectionPanelPolicy.needsEscapeFallback(
+            hasSelectionKeyPanel: true,
+            isResponderHandlingEscape: false))
+        #expect(!CaptureSelectionPanelPolicy.needsEscapeFallback(
+            hasSelectionKeyPanel: false,
+            isResponderHandlingEscape: false))
+        #expect(!CaptureSelectionPanelPolicy.needsEscapeFallback(
+            hasSelectionKeyPanel: true,
+            isResponderHandlingEscape: true))
+    }
+
+    @Test
+    func `Escape fallback monitor is removed exactly once`() {
+        let token = NSObject()
+        var removeCount = 0
+        let monitor = CaptureSelectionEscapeMonitor(
+            addMonitor: { _ in token },
+            removeMonitor: { removedToken in
+                #expect((removedToken as AnyObject) === token)
+                removeCount += 1
+            })
+
+        monitor.start { $0 }
+        monitor.stop()
+        monitor.stop()
+
+        #expect(removeCount == 1)
     }
 }

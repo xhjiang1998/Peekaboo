@@ -85,6 +85,45 @@ struct PeekabooAIServiceConversationTests {
     }
 
     @Test
+    func `Image turn binds screenshot only to the explicit current prompt`() throws {
+        let imageData = Data([0x89, 0x50, 0x4E, 0x47])
+        let history = [
+            PeekabooAIService.ConversationTurn(role: .user, text: "first screenshot"),
+            PeekabooAIService.ConversationTurn(role: .assistant, text: "first answer"),
+        ]
+
+        let messages = PeekabooAIService.makeImageTurnMessages(
+            imageData: imageData,
+            history: history,
+            currentPrompt: "second screenshot")
+
+        #expect(messages.map(\.role) == [.user, .assistant, .user])
+        #expect(messages.compactMap { self.image(in: $0) }.count == 1)
+        #expect(self.image(in: messages[0]) == nil)
+        #expect(self.text(in: messages[2]) == "second screenshot")
+        #expect(self.image(in: messages[2])?.data == imageData.base64EncodedString())
+    }
+
+    @Test
+    func `Image turn supports an empty history and explicit model`() async throws {
+        var capturedMessages: [ModelMessage] = []
+        let service = PeekabooAIService(textGenerator: { _, messages, _ in
+            capturedMessages = messages
+            return GenerateTextResult(text: "answer")
+        })
+
+        _ = try await service.analyzeImageTurn(
+            imageData: Data([1, 2, 3]),
+            history: [],
+            currentPrompt: "analyze current image",
+            model: .openai(.gpt55))
+
+        #expect(capturedMessages.count == 1)
+        #expect(self.text(in: capturedMessages[0]) == "analyze current image")
+        #expect(self.image(in: capturedMessages[0]) != nil)
+    }
+
+    @Test
     func `Text-only continuation never creates an image content part`() throws {
         let turns = [
             PeekabooAIService.ConversationTurn(role: .user, text: "Explain this screenshot"),

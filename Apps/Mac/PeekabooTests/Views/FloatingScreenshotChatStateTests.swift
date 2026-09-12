@@ -27,6 +27,53 @@ struct FloatingScreenshotChatStateTests {
     }
 
     @Test
+    func sameSessionPresentationSelectsLatestCaptureWithoutCollapsingPreview() {
+        let state = FloatingScreenshotChatState()
+        let firstCaptureID = UUID()
+        let secondCaptureID = UUID()
+
+        state.present(Self.context(
+            sessionID: "session",
+            captureID: firstCaptureID,
+            isNewSession: true))
+        state.togglePreview()
+        state.present(Self.context(
+            sessionID: "session",
+            captureID: secondCaptureID,
+            isNewSession: false))
+
+        #expect(state.currentContext?.captureID == secondCaptureID)
+        #expect(state.selectedCaptureID == secondCaptureID)
+        #expect(state.isPreviewExpanded)
+        #expect(state.presentationGeneration == 2)
+    }
+
+    @Test
+    func userCanSelectAnEarlierCaptureUntilANewCaptureArrives() {
+        let state = FloatingScreenshotChatState()
+        let firstCaptureID = UUID()
+        let secondCaptureID = UUID()
+        let thirdCaptureID = UUID()
+        state.present(Self.context(
+            sessionID: "session",
+            captureID: firstCaptureID,
+            isNewSession: true))
+        state.present(Self.context(
+            sessionID: "session",
+            captureID: secondCaptureID,
+            isNewSession: false))
+
+        state.selectCapture(firstCaptureID)
+        #expect(state.selectedCaptureID == firstCaptureID)
+
+        state.present(Self.context(
+            sessionID: "session",
+            captureID: thirdCaptureID,
+            isNewSession: false))
+        #expect(state.selectedCaptureID == thirdCaptureID)
+    }
+
+    @Test
     func sharedScreenshotControlsUseTheFloatingCardLayoutContract() {
         #expect(ScreenshotPreviewCard.collapsedHeight == 100)
         #expect(ScreenshotPreviewCard.expandedMaximumHeight == 280)
@@ -72,10 +119,16 @@ struct FloatingScreenshotChatStateTests {
         #expect(state.isDismissedForCurrentPresentation)
     }
 
-    private static func context(sessionID: String) -> ScreenshotPresentationContext {
+    private static func context(
+        sessionID: String,
+        captureID: UUID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+        isNewSession: Bool = true) -> ScreenshotPresentationContext
+    {
         ScreenshotPresentationContext(
             sessionID: sessionID,
+            captureID: captureID,
             selectionRect: CGRect(x: 100, y: 300, width: 200, height: 100),
-            displayID: 7)
+            displayID: 7,
+            isNewSession: isNewSession)
     }
 }

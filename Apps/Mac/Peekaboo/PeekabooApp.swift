@@ -218,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissions: Permissions?
     private var agent: PeekabooAgent?
     private var captureAndAskCoordinator: CaptureAndAskCoordinator?
+    private let screenshotConversationLifetime = ScreenshotConversationLifetime()
     private var floatingScreenshotChatPanelController: FloatingScreenshotChatPanelController?
 
     // Visualizer components
@@ -287,6 +288,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .environment(context.screenshotConversationService)
             }
             callbackRelay.controller = panelController
+            panelController.onDismiss = { [weak self] in
+                self?.screenshotConversationLifetime.endReuseCycle()
+            }
             self.floatingScreenshotChatPanelController = panelController
         }
 
@@ -297,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 services: context.services,
                 selector: CaptureSelectionController(),
                 conversationService: context.screenshotConversationService,
+                lifetime: self.screenshotConversationLifetime,
                 conversationPresenter: conversationPresenter)
         }
 

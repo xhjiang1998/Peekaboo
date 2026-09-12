@@ -66,7 +66,7 @@ jobs:
           PEEKABOO_CONFIG_DISABLE_MIGRATION: "1"
           PEEKABOO_RUN_LIVE_AGENT_TESTS: "0"
           PEEKABOO_INCLUDE_AUTOMATION_TESTS: "false"
-        run: swift test --no-parallel --filter PeekabooAIServiceConversationTests
+        run: swift test --enable-code-coverage --no-parallel --filter PeekabooAIServiceConversationTests
 
       - name: Run Mac app tests
         working-directory: Apps/Mac
@@ -75,7 +75,18 @@ jobs:
           PEEKABOO_CONFIG_DISABLE_MIGRATION: "1"
           PEEKABOO_RUN_LIVE_AGENT_TESTS: "0"
           PEEKABOO_INCLUDE_AUTOMATION_TESTS: "false"
-        run: swift test --no-parallel
+        run: swift test --enable-code-coverage --no-parallel
+
+      - name: Upload test coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Peekaboo-test-coverage-${{ github.run_number }}
+          path: |
+            Apps/Mac/.build/**/codecov/*.json
+            Core/PeekabooCore/.build/**/codecov/*.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Build unsigned Peekaboo app
         env:

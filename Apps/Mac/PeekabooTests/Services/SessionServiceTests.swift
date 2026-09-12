@@ -86,6 +86,29 @@ struct SessionStoreTests {
     }
 
     @Test
+    mutating func `Insert or update message is idempotent and remains after its anchor`() throws {
+        self.setup()
+        defer { tearDown() }
+        let session = self.store.createSession(title: "Screenshot", modelName: "test-model")
+        let anchor = ConversationMessage(role: .user, content: "capture")
+        self.store.addMessage(anchor, to: session)
+        let answerID = UUID()
+
+        self.store.insertOrUpdateMessage(
+            ConversationMessage(id: answerID, role: .assistant, content: "first"),
+            after: anchor.id,
+            in: session.id)
+        self.store.insertOrUpdateMessage(
+            ConversationMessage(id: answerID, role: .assistant, content: "updated"),
+            after: anchor.id,
+            in: session.id)
+
+        let messages = try #require(self.store.session(id: session.id)?.messages)
+        #expect(messages.map(\.id) == [anchor.id, answerID])
+        #expect(messages.last?.content == "updated")
+    }
+
+    @Test
     mutating func `Sessions are sorted by start time (newest first)`() async {
         self.setup()
         defer { tearDown() }
@@ -109,6 +132,36 @@ struct SessionStoreTests {
 @Suite(.tags(.services, .integration))
 @MainActor
 struct SessionStorePersistenceTests {
+    @Test
+    func `Explicit persistence writes synchronously and can be reloaded`() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storageURL = directory.appendingPathComponent("sessions.json")
+        let store = SessionStore(storageURL: storageURL)
+        let session = store.createSession(title: "Screenshot", modelName: "model")
+        store.addMessage(ConversationMessage(role: .user, content: "capture"), to: session)
+
+        try store.persistSessionsNow()
+
+        let restored = SessionStore(storageURL: storageURL)
+        #expect(restored.session(id: session.id)?.messages.first?.content == "capture")
+    }
+
+    @Test
+    func `Explicit persistence reports an unwritable storage path`() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let parentFile = directory.appendingPathComponent("not-a-directory")
+        try Data([1]).write(to: parentFile)
+        let store = SessionStore(storageURL: parentFile.appendingPathComponent("sessions.json"))
+        _ = store.createSession(title: "Screenshot", modelName: "model")
+
+        #expect(throws: (any Error).self) {
+            try store.persistSessionsNow()
+        }
+    }
+
     @Test
     func `Corrupt persistence is reported instead of looking like an empty store`() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

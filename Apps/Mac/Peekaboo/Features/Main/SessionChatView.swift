@@ -14,6 +14,7 @@ struct SessionChatView: View {
     @State private var inputText = ""
     @State private var isProcessing = false
     @State private var hasConnectionError = false
+    @State private var selectedScreenshotCaptureID: UUID?
 
     private var isCurrentSession: Bool {
         self.session.id == self.sessionStore.currentSession?.id
@@ -36,9 +37,29 @@ struct SessionChatView: View {
             (self.screenshotStatus == .analyzing || self.screenshotStatus == .cancelling)
     }
 
+    private var isScreenshotServiceBusy: Bool {
+        self.isScreenshotConversation && self.screenshotConversationService.isBusy(sessionID: self.session.id)
+    }
+
+    private var hasFailedScreenshotCapture: Bool {
+        self.screenshotConversationService.captures(sessionID: self.session.id)
+            .contains(where: { $0.analysisState == .failed })
+    }
+
+    private var hasFailedScreenshotStatus: Bool {
+        if case .failed = self.screenshotStatus {
+            return true
+        }
+        return false
+    }
+
     private var isActive: Bool {
         guard self.isCurrentSession else { return false }
         return self.isScreenshotConversation ? self.isScreenshotBusy : self.agent.isProcessing
+    }
+
+    private var screenshotCaptureIDs: [UUID] {
+        self.screenshotConversationService.captures(sessionID: self.session.id).map(\.captureID)
     }
 
     var body: some View {
@@ -55,9 +76,11 @@ struct SessionChatView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         if self.isScreenshotConversation {
-                            ScreenshotPreviewCard(
+                            ScreenshotCaptureBrowser(
                                 sessionID: self.session.id,
-                                isExpanded: true)
+                                selectedCaptureID: self.selectedScreenshotCaptureID,
+                                isExpanded: true,
+                                onSelectCapture: { self.selectedScreenshotCaptureID = $0 })
                                 .id(self.session.id)
                         }
 
@@ -114,13 +137,14 @@ struct SessionChatView: View {
                         retry: nil)
                     Divider()
                 } else if self.isScreenshotConversation,
-                          case let .failed(message) = self.screenshotStatus
+                          case let .failed(message) = self.screenshotStatus,
+                          !self.hasFailedScreenshotCapture
                 {
                     ScreenshotAnalysisErrorBanner(
                         message: message,
                         retry: {
                             Task {
-                                try? await self.screenshotConversationService.analyze(
+                                try? await self.screenshotConversationService.retryAnalysis(
                                     sessionID: self.session.id)
                             }
                         })
@@ -138,11 +162,17 @@ struct SessionChatView: View {
                         sessionID: self.session.id,
                         placeholder: self.placeholderText,
                         canSubmit: self.canSubmit,
-                        isBusy: self.isScreenshotBusy)
+                        isBusy: self.isScreenshotServiceBusy)
                 } else {
                     self.textInputArea
                 }
             }
+        }
+        .onAppear {
+            self.selectedScreenshotCaptureID = self.screenshotCaptureIDs.last
+        }
+        .onChange(of: self.screenshotCaptureIDs) { _, captureIDs in
+            self.selectedScreenshotCaptureID = captureIDs.last
         }
     }
 
@@ -185,7 +215,11 @@ struct SessionChatView: View {
     private var placeholderText: String {
         if self.screenshotStatus == .cancelling {
             "正在停止分析…"
-        } else if self.isScreenshotBusy {
+        } else if self.hasFailedScreenshotCapture {
+            "请先重试或跳过失败截图"
+        } else if case .failed = self.screenshotStatus {
+            "请先重试失败的回答"
+        } else if self.isScreenshotServiceBusy {
             "正在分析截图…"
         } else if self.screenshotRoute == .screenshotContextMissing {
             "原截图已丢失，请重新截图"
@@ -203,7 +237,7 @@ struct SessionChatView: View {
     private var canSubmit: Bool {
         switch self.screenshotRoute {
         case .screenshotAvailable:
-            !self.isScreenshotBusy
+            !self.isScreenshotServiceBusy && !self.hasFailedScreenshotStatus
         case .screenshotContextMissing:
             false
         case .ordinary:

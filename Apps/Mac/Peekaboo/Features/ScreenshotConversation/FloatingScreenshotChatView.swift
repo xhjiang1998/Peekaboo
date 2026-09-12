@@ -33,7 +33,9 @@ struct FloatingScreenshotChatView: View {
                 self.unavailableCard
             }
         }
-        .frame(width: Self.cardWidth)
+        .frame(
+            minWidth: FloatingPanelGeometry.minimumSize.width,
+            minHeight: FloatingPanelGeometry.minimumSize.height)
         .modernBackground(style: .hudWindow, cornerRadius: 18)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
@@ -57,8 +59,7 @@ struct FloatingScreenshotChatView: View {
                         modelName: self.modelName(for: session),
                         isPreviewExpanded: self.state.isPreviewExpanded,
                         onClose: self.onClose,
-                        onTogglePreview: self.state.togglePreview,
-                        onHorizontalDrag: self.onHorizontalDrag)
+                        onTogglePreview: self.state.togglePreview)
                     Divider()
                 case .scrollableConversation:
                     self.conversationContent(session: session)
@@ -81,9 +82,11 @@ struct FloatingScreenshotChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ScreenshotPreviewCard(
+                    ScreenshotCaptureBrowser(
                         sessionID: session.id,
-                        isExpanded: self.state.isPreviewExpanded)
+                        selectedCaptureID: self.state.selectedCaptureID,
+                        isExpanded: self.state.isPreviewExpanded,
+                        onSelectCapture: self.state.selectCapture)
                         .id("screenshot-preview-\(session.id)")
 
                     ForEach(session.messages) { message in
@@ -115,14 +118,16 @@ struct FloatingScreenshotChatView: View {
                 retry: nil)
                 .id("screenshot-context-missing")
         } else if case let .failed(message) = status {
-            ScreenshotAnalysisErrorBanner(
-                message: message,
-                retry: {
-                    Task {
-                        try? await self.screenshotConversationService.analyze(sessionID: sessionID)
-                    }
-                })
-                .id("screenshot-analysis-error")
+            if !self.hasFailedCapture(sessionID: sessionID) {
+                ScreenshotAnalysisErrorBanner(
+                    message: message,
+                    retry: {
+                        Task {
+                            try? await self.screenshotConversationService.retryAnalysis(sessionID: sessionID)
+                        }
+                    })
+                    .id("screenshot-analysis-error")
+            }
         } else if self.isBusy(sessionID: sessionID) {
             ScreenshotConversationProgressView(isCancelling: status == .cancelling)
                 .id("screenshot-progress")
@@ -138,8 +143,7 @@ struct FloatingScreenshotChatView: View {
                 modelName: nil,
                 isPreviewExpanded: false,
                 onClose: self.onClose,
-                onTogglePreview: {},
-                onHorizontalDrag: self.onHorizontalDrag)
+                onTogglePreview: {})
 
             Divider()
 
@@ -156,13 +160,25 @@ struct FloatingScreenshotChatView: View {
     }
 
     private func isBusy(sessionID: String) -> Bool {
-        let status = self.screenshotConversationService.status(for: sessionID)
-        return status == .analyzing || status == .cancelling
+        self.screenshotConversationService.isBusy(sessionID: sessionID)
+    }
+
+    private func hasFailedCapture(sessionID: String) -> Bool {
+        self.screenshotConversationService.captures(sessionID: sessionID)
+            .contains(where: { $0.analysisState == .failed })
+    }
+
+    private func hasFailedStatus(sessionID: String) -> Bool {
+        if case .failed = self.screenshotConversationService.status(for: sessionID) {
+            return true
+        }
+        return false
     }
 
     private func canSubmit(sessionID: String) -> Bool {
         self.screenshotConversationService.route(for: sessionID) == .screenshotAvailable &&
-            !self.isBusy(sessionID: sessionID)
+            !self.isBusy(sessionID: sessionID) &&
+            !self.hasFailedStatus(sessionID: sessionID)
     }
 
     private func placeholder(for sessionID: String) -> String {
@@ -170,12 +186,16 @@ struct FloatingScreenshotChatView: View {
         let status = self.screenshotConversationService.status(for: sessionID)
         if status == .cancelling {
             return "正在停止分析…"
+        } else if self.hasFailedCapture(sessionID: sessionID) {
+            return "请先重试或跳过失败截图"
+        } else if case .failed = status {
+            return "请先重试失败的回答"
         } else if self.isBusy(sessionID: sessionID) {
             return "正在分析截图…"
         } else if route == .screenshotContextMissing {
             return "原截图已丢失，请重新截图"
         } else {
-            return "继续追问这张截图…"
+            return "继续追问当前会话…"
         }
     }
 
@@ -191,10 +211,6 @@ private struct FloatingScreenshotChatHeader: View {
     let isPreviewExpanded: Bool
     let onClose: () -> Void
     let onTogglePreview: () -> Void
-    let onHorizontalDrag: (_ translation: CGFloat, _ startX: CGFloat) -> Void
-
-    @State private var windowBox = WeakFloatingWindowBox()
-    @State private var dragStartX: CGFloat?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -217,11 +233,8 @@ private struct FloatingScreenshotChatHeader: View {
                 Spacer(minLength: 8)
             }
             .contentShape(Rectangle())
-            .gesture(self.dragGesture)
-            .background {
-                FloatingWindowReader { window in
-                    self.windowBox.window = window
-                }
+            .overlay {
+                FloatingPanelDragHandle()
             }
 
             Button(action: self.onTogglePreview, label: {
@@ -229,6 +242,12 @@ private struct FloatingScreenshotChatHeader: View {
             })
             .buttonStyle(.plain)
             .help(self.isPreviewExpanded ? "折叠截图" : "展开截图")
+
+            Button(action: self.onClose, label: {
+                Image(systemName: "square.and.pencil")
+            })
+            .buttonStyle(.plain)
+            .help("新会话")
 
             Button(action: self.onClose, label: {
                 Image(systemName: "xmark")
@@ -240,53 +259,4 @@ private struct FloatingScreenshotChatHeader: View {
         .padding(.vertical, 10)
     }
 
-    private var dragGesture: some Gesture {
-        DragGesture(minimumDistance: 2)
-            .onChanged { value in
-                if self.dragStartX == nil {
-                    self.dragStartX = self.windowBox.window?.frame.minX
-                }
-                guard let dragStartX = self.dragStartX else { return }
-                self.onHorizontalDrag(value.translation.width, dragStartX)
-            }
-            .onEnded { _ in
-                self.dragStartX = nil
-            }
-    }
-}
-
-@MainActor
-private final class WeakFloatingWindowBox {
-    weak var window: NSWindow?
-}
-
-private struct FloatingWindowReader: NSViewRepresentable {
-    let onWindowChange: (NSWindow?) -> Void
-
-    func makeNSView(context: Context) -> WindowReaderView {
-        WindowReaderView(onWindowChange: self.onWindowChange)
-    }
-
-    func updateNSView(_ nsView: WindowReaderView, context: Context) {
-        nsView.onWindowChange = self.onWindowChange
-    }
-}
-
-private final class WindowReaderView: NSView {
-    var onWindowChange: (NSWindow?) -> Void
-
-    init(onWindowChange: @escaping (NSWindow?) -> Void) {
-        self.onWindowChange = onWindowChange
-        super.init(frame: .zero)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        self.onWindowChange(self.window)
-    }
 }
