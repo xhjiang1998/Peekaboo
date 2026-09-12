@@ -22,7 +22,7 @@ struct FloatingScreenshotChatPanelControllerTests {
         #expect(panel.styleMask.contains(.titled))
         #expect(panel.styleMask.contains(.resizable))
         #expect(panel.styleMask.contains(.nonactivatingPanel))
-        #expect(!panel.styleMask.contains(.borderless))
+        #expect(panel.styleMask != .borderless)
         #expect(panel.titleVisibility == .hidden)
         #expect(panel.titlebarAppearsTransparent)
         #expect(panel.minSize == CGSize(width: 360, height: 260))

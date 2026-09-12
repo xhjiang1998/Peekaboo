@@ -21,11 +21,16 @@ struct FloatingPanelGeometryStoreTests {
     @Test
     func invalidPersistedGeometryIsIgnored() throws {
         let defaults = try #require(UserDefaults(suiteName: #function))
-        defaults.removePersistentDomain(forName: #function)
-        defaults.set(
-            ["x": 10, "y": 20, "width": -1, "height": 600],
-            forKey: FloatingPanelGeometryStore.storageKey)
+        for size in [
+            CGSize(width: -1, height: 600),
+            CGSize(width: 460, height: -1),
+        ] {
+            defaults.removePersistentDomain(forName: #function)
+            defaults.set(
+                ["x": 10, "y": 20, "width": size.width, "height": size.height],
+                forKey: FloatingPanelGeometryStore.storageKey)
 
-        #expect(FloatingPanelGeometryStore(defaults: defaults).loadFrame() == nil)
+            #expect(FloatingPanelGeometryStore(defaults: defaults).loadFrame() == nil)
+        }
     }
 }

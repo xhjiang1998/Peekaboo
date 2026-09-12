@@ -30,6 +30,7 @@ struct ScreenshotConversationContextStoreTests {
     func `Legacy manifest ignores injected capture paths before any file operation`() throws {
         let root = self.makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let outside = root.deletingLastPathComponent()
             .appendingPathComponent("outside-\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(at: outside) }

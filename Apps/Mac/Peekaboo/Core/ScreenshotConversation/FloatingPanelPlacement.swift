@@ -160,8 +160,8 @@ enum FloatingPanelGeometry {
 
     nonisolated static func isValidFrame(_ frame: CGRect) -> Bool {
         frame.minX.isFinite && frame.minY.isFinite &&
-            frame.width.isFinite && frame.height.isFinite &&
-            frame.width > 0 && frame.height > 0
+            frame.size.width.isFinite && frame.size.height.isFinite &&
+            frame.size.width > 0 && frame.size.height > 0
     }
 
     private nonisolated static func clamp(
