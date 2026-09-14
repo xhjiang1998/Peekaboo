@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import PeekabooCore
@@ -7,6 +8,27 @@ import Testing
 @Suite(.tags(.services, .unit))
 @MainActor
 struct CaptureAndAskCoordinatorTests {
+    @Test
+    func `Presenting a capture failure returns without entering a modal session`() {
+        defer { CaptureAndAskCoordinator.dismissFailurePanel() }
+        CaptureAndAskCoordinator.showFailureAlert(.screenRecordingDenied)
+        #expect(NSApplication.shared.modalWindow == nil)
+        CaptureAndAskCoordinator.showFailureAlert(.captureFailed)
+        #expect(NSApplication.shared.modalWindow == nil)
+    }
+
+    @Test
+    func `Capture error uses a dismissible fullscreen floating panel`() {
+        let panel = CaptureAndAskCoordinator.makeFailurePanel(.screenRecordingDenied)
+        #expect(panel.styleMask.contains(.nonactivatingPanel))
+        #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+        #expect(panel.collectionBehavior.contains(.canJoinAllApplications))
+        #expect(panel.level == .floating)
+        #expect(!panel.hidesOnDeactivate)
+        #expect(panel.contentView != nil)
+        panel.close()
+    }
+
     @Test
     func `Successful capture presents conversation before analysis`() async {
         var events: [String] = []
@@ -118,11 +140,15 @@ struct CaptureAndAskCoordinatorTests {
             cancelConversation: { _ in },
             reportFailure: { reportedFailures.append($0) })
 
-        await coordinator.performCapture()
+        coordinator.startCapture()
+        for _ in 0..<20 { await Task.yield() }
 
         #expect(!didSelect)
         #expect(coordinator.state == .failed(.screenRecordingDenied))
         #expect(reportedFailures == [.screenRecordingDenied])
+        coordinator.startCapture()
+        for _ in 0..<20 { await Task.yield() }
+        #expect(reportedFailures == [.screenRecordingDenied, .screenRecordingDenied])
     }
 
     @Test

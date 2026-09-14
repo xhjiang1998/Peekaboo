@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import Observation
 import PeekabooCore
+import SwiftUI
 
 enum CaptureAndAskFailure: Equatable, Sendable {
     case screenRecordingDenied
@@ -173,6 +174,7 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
 
     func startCapture() {
         guard self.captureTask == nil else { return }
+        Self.dismissFailurePanel()
         self.captureTask = Task { [weak self] in
             guard let self else { return }
             let sessionID = await self.prepareCapture()
@@ -329,25 +331,46 @@ final class CaptureAndAskCoordinator: CaptureAndAskCoordinating {
             height: rect.height)
     }
 
-    private static func showFailureAlert(_ failure: CaptureAndAskFailure) {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = failure == .screenRecordingDenied ? "需要屏幕录制权限" : "截图 AI 未完成"
-        alert.informativeText = failure.userMessage
-        if failure == .screenRecordingDenied {
-            alert.addButton(withTitle: "打开系统设置")
-            alert.addButton(withTitle: "取消")
-        } else {
-            alert.addButton(withTitle: "好")
+    private static var failurePanel: FloatingScreenshotChatPanel?
+
+    static func dismissFailurePanel() {
+        self.failurePanel?.close()
+        self.failurePanel = nil
+    }
+
+    static func makeFailurePanel(_ failure: CaptureAndAskFailure) -> FloatingScreenshotChatPanel {
+        FloatingScreenshotChatPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 420, height: 200),
+            onEscape: { Self.dismissFailurePanel() }) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(failure == .screenRecordingDenied ? "需要屏幕录制权限" : "截图 AI 未完成").font(.headline)
+                Text(failure.userMessage)
+                HStack {
+                    Button("关闭") { Self.dismissFailurePanel() }
+                    if failure == .screenRecordingDenied {
+                        Button("打开系统设置") {
+                            Self.dismissFailurePanel()
+                            if let url = URL(string:
+                                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                            {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                    }
+                }
+            }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity).background(.regularMaterial)
         }
-        let response = alert.runModal()
-        guard failure == .screenRecordingDenied,
-              response == .alertFirstButtonReturn,
-              let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-        else {
-            return
+    }
+
+    static func showFailureAlert(_ failure: CaptureAndAskFailure) {
+        Self.dismissFailurePanel()
+        let panel = Self.makeFailurePanel(failure)
+        Self.failurePanel = panel
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        if let frame = screen?.visibleFrame {
+            panel.setFrameOrigin(CGPoint(x: frame.midX - panel.frame.width / 2, y: frame.midY - panel.frame.height / 2))
         }
-        NSWorkspace.shared.open(url)
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
     }
 }
