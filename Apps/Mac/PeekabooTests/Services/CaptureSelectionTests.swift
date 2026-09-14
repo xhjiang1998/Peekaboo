@@ -61,6 +61,7 @@ struct CaptureSelectionTests {
         #expect(CaptureSelectionPanelPolicy.styleMask == [.borderless, .nonactivatingPanel])
         #expect(CaptureSelectionPanelPolicy.collectionBehavior.contains(.fullScreenAuxiliary))
         #expect(CaptureSelectionPanelPolicy.collectionBehavior.contains(.canJoinAllSpaces))
+        #expect(CaptureSelectionPanelPolicy.collectionBehavior.contains(.canJoinAllApplications))
         #expect(CaptureSelectionPanelPolicy.canBecomeKey)
         #expect(!CaptureSelectionPanelPolicy.canBecomeMain)
     }

@@ -102,6 +102,7 @@ enum CaptureSelectionPanelPolicy {
     static let styleMask: NSWindow.StyleMask = [.borderless, .nonactivatingPanel]
     static let collectionBehavior: NSWindow.CollectionBehavior = [
         .canJoinAllSpaces,
+        .canJoinAllApplications,
         .stationary,
         .fullScreenAuxiliary,
     ]
