@@ -141,13 +141,15 @@ struct CaptureAndAskCoordinatorTests {
             reportFailure: { reportedFailures.append($0) })
 
         coordinator.startCapture()
-        for _ in 0..<20 { await Task.yield() }
+        let firstFailureReported = await self.waitUntil { reportedFailures.count == 1 }
+        #expect(firstFailureReported)
 
         #expect(!didSelect)
         #expect(coordinator.state == .failed(.screenRecordingDenied))
         #expect(reportedFailures == [.screenRecordingDenied])
         coordinator.startCapture()
-        for _ in 0..<20 { await Task.yield() }
+        let secondFailureReported = await self.waitUntil { reportedFailures.count == 2 }
+        #expect(secondFailureReported)
         #expect(reportedFailures == [.screenRecordingDenied, .screenRecordingDenied])
     }
 
